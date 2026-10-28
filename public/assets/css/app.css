@@ -564,6 +564,11 @@ input {
   height: 1.15rem;
 }
 
+/* SVG has no hidden IDL / UA [hidden] style; force hide after createIcons. */
+.icon-btn [hidden] {
+  display: none !important;
+}
+
 .check {
   display: flex;
   align-items: center;

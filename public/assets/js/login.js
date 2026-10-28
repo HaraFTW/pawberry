@@ -11,13 +11,30 @@ export function initLoginForm() {
   if (toggle && input) {
     const iconShow = toggle.querySelector('[data-icon-show]');
     const iconHide = toggle.querySelector('[data-icon-hide]');
+
+    const setIconVisibility = (passwordVisible) => {
+      // SVG elements have no `hidden` IDL property — toggle the attribute instead.
+      if (iconShow) {
+        if (passwordVisible) iconShow.setAttribute('hidden', '');
+        else iconShow.removeAttribute('hidden');
+      }
+      if (iconHide) {
+        if (passwordVisible) iconHide.removeAttribute('hidden');
+        else iconHide.setAttribute('hidden', '');
+      }
+    };
+
+    setIconVisibility(input.type === 'text');
+
     toggle.addEventListener('click', () => {
-      const showing = input.type === 'text';
-      input.type = showing ? 'password' : 'text';
-      toggle.setAttribute('aria-pressed', showing ? 'false' : 'true');
-      toggle.setAttribute('aria-label', showing ? 'Show passphrase' : 'Hide passphrase');
-      if (iconShow) iconShow.hidden = !showing;
-      if (iconHide) iconHide.hidden = showing;
+      const passwordVisible = input.type !== 'text';
+      input.type = passwordVisible ? 'text' : 'password';
+      toggle.setAttribute('aria-pressed', passwordVisible ? 'true' : 'false');
+      toggle.setAttribute(
+        'aria-label',
+        passwordVisible ? 'Hide passphrase' : 'Show passphrase'
+      );
+      setIconVisibility(passwordVisible);
     });
   }
 
