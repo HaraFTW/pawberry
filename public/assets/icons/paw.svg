@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="PawBerry">
+  <defs>
+    <linearGradient id="g" x1="20" y1="10" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E4BB93"/>
+      <stop offset="1" stop-color="#D5A0A5"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#44332A"/>
+  <g fill="url(#g)">
+    <ellipse cx="40" cy="42" rx="14" ry="18" transform="rotate(-18 40 42)"/>
+    <ellipse cx="64" cy="30" rx="13" ry="17"/>
+    <ellipse cx="88" cy="42" rx="14" ry="18" transform="rotate(18 88 42)"/>
+    <ellipse cx="28" cy="68" rx="11" ry="14" transform="rotate(-8 28 68)"/>
+    <ellipse cx="100" cy="68" rx="11" ry="14" transform="rotate(8 100 68)"/>
+    <path d="M64 54c-18 0-34 14-34 34 0 8 6 14 16 14 7 0 11-3 18-3s11 3 18 3c10 0 16-6 16-14 0-20-16-34-34-34z"/>
+  </g>
+</svg>

@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace PawBerry\Controllers;
+
+use PawBerry\Core\Config;
+use PawBerry\Core\Request;
+use PawBerry\Core\Response;
+use PawBerry\Core\Url;
+
+final class ManifestController
+{
+    public function show(Request $request): Response
+    {
+        $manifest = [
+            'name' => Config::appName(),
+            'short_name' => 'PawBerry',
+            'description' => 'A cozy personal pet care journal',
+            'start_url' => Url::to('/'),
+            'scope' => Config::basePath() === '' ? '/' : Config::basePath() . '/',
+            'display' => 'standalone',
+            'background_color' => '#342720',
+            'theme_color' => '#342720',
+            'icons' => [
+                [
+                    'src' => Url::asset('icons/paw.svg'),
+                    'sizes' => 'any',
+                    'type' => 'image/svg+xml',
+                    'purpose' => 'any maskable',
+                ],
+            ],
+        ];
+
+        return Response::json($manifest)->withHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    }
+}

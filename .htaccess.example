@@ -1,0 +1,27 @@
+# Local / project-root DocumentRoot fallback (e.g. D:/Proj/pawberry → http://pawberry.local/).
+# Copy to `.htaccess` for local XAMPP when DocumentRoot is the project root.
+# `.htaccess` is gitignored (environment-specific).
+# Production under /pawberry should expose only public/ contents — do not deploy this file there.
+
+Options -Indexes
+
+# Forbid direct HTTP access to private / sensitive paths (mod_alias).
+RedirectMatch 403 ^/(app|bin|config|database|storage|routes|vendor)(/|$)
+RedirectMatch 403 ^/(\.git|\.github)(/|$)
+RedirectMatch 403 ^/bootstrap\.php$
+RedirectMatch 403 ^/composer\.(json|lock)$
+RedirectMatch 403 ^/\.env
+RedirectMatch 403 \.(sql|log|bak|dist)$
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Serve existing public files directly (assets, sw.js, etc.)
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -f
+    RewriteRule ^(.*)$ public/$1 [L]
+
+    # Route everything else through the public front controller
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/index.php [L,QSA]
+</IfModule>

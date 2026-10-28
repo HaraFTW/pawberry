@@ -1,0 +1,37 @@
+# Local configuration (secrets)
+/config/app.php
+/config/database.php
+
+# Environment-specific Apache rules when DocumentRoot is the project root.
+# Use .htaccess.example as the template. Production should serve public/ only.
+/.htaccess
+
+# Logs and temporary files
+/storage/logs/*
+!/storage/logs/.gitkeep
+/storage/cache/*
+!/storage/cache/.gitkeep
+/storage/tmp/*
+!/storage/tmp/.gitkeep
+
+# Private uploads (future phases)
+/storage/uploads/*
+!/storage/uploads/.gitkeep
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Composer (not used by default)
+/vendor/
+composer.lock
+
+# Environment overrides
+.env
+.env.local

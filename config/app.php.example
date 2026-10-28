@@ -1,0 +1,51 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Application configuration example.
+ * Copy to app.php and adjust for your environment.
+ * app.php is gitignored and must never be committed.
+ */
+return [
+    // development | production
+    'env' => 'development',
+
+    'name' => 'PawBerry',
+
+    // Full origin without trailing slash, e.g. http://pawberry.local or https://bfgd.ro
+    'base_url' => 'http://pawberry.local',
+
+    // Application path relative to the web host. Use '' or '/' for root, '/pawberry' for subdirectory.
+    'base_path' => '/',
+
+    // Display timezone for the single user
+    'timezone' => 'Europe/Bucharest',
+
+    // Session cookie settings
+    'session' => [
+        'name' => 'pawberry_session',
+        'lifetime' => 0, // until browser closes; remember-me handles persistence
+        'secure' => null, // null = auto-detect HTTPS
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ],
+
+    // Remember-me settings
+    'remember' => [
+        'cookie' => 'pawberry_remember',
+        'lifetime_days' => 365,
+        'secure' => null, // null = auto-detect HTTPS
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ],
+
+    // Login rate limiting
+    'rate_limit' => [
+        'max_attempts' => 5,
+        'window_seconds' => 900, // 15 minutes
+    ],
+
+    // Absolute path to storage directory (logs, cache). Leave null to use project storage/
+    'storage_path' => null,
+];

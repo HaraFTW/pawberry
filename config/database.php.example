@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Database configuration example.
+ * Copy to database.php and adjust for your environment.
+ * database.php is gitignored and must never be committed.
+ */
+return [
+    'host' => '127.0.0.1',
+    'port' => 3306,
+    'database' => 'pawberry',
+    'username' => 'root',
+    'password' => '',
+    'charset' => 'utf8mb4',
+    'collation' => 'utf8mb4_unicode_ci',
+];
