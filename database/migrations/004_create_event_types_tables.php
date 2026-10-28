@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return new class {
-    public function up(\PDO $pdo): void
+    public function up(PDO $pdo): void
     {
         $pdo->exec(
             'CREATE TABLE IF NOT EXISTS event_types (
@@ -19,15 +19,7 @@ return new class {
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 KEY event_types_archived_at_index (archived_at),
-                KEY event_types_name_index (name),
-                CONSTRAINT event_types_recurrence_check CHECK (
-                    (recurrence_interval IS NULL AND recurrence_unit IS NULL)
-                    OR (
-                        recurrence_interval IS NOT NULL
-                        AND recurrence_interval > 0
-                        AND recurrence_unit IN (\'days\', \'weeks\', \'months\', \'years\')
-                    )
-                )
+                KEY event_types_name_index (name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
 
@@ -48,10 +40,7 @@ return new class {
                 KEY event_type_fields_deleted_at_index (deleted_at),
                 CONSTRAINT event_type_fields_type_fk
                     FOREIGN KEY (event_type_id) REFERENCES event_types (id)
-                    ON DELETE CASCADE,
-                CONSTRAINT event_type_fields_type_check CHECK (
-                    field_type IN (\'text\', \'number\', \'date\', \'checkbox\', \'rating\')
-                )
+                    ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
     }

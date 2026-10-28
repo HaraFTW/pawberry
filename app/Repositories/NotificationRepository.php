@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace PawBerry\Repositories;
 
 use PawBerry\Core\Database;
+use PawBerry\Support\EventTypeCatalog;
 use PawBerry\Support\NotificationPresenter;
 use PDO;
+use RuntimeException;
 
 final class NotificationRepository
 {
@@ -407,6 +409,9 @@ final class NotificationRepository
     }
 
     /**
+     * Create the single active notification for a source event.
+     * Locks the source event row and replaces any existing active row for it.
+     *
      * @param array{
      *   source_event_id: int,
      *   due_date: string,
@@ -418,24 +423,66 @@ final class NotificationRepository
      */
     public function createActive(array $data, ?PDO $pdo = null): int
     {
+        $sourceEventId = (int) $data['source_event_id'];
+        $interval = (int) $data['recurrence_interval'];
+        $unit = (string) $data['recurrence_unit'];
+
+        if ($sourceEventId < 1) {
+            throw new RuntimeException('A source event is required for an active reminder.');
+        }
+        if ($interval < 1) {
+            throw new RuntimeException('Recurrence interval must be at least 1.');
+        }
+        if (!in_array($unit, EventTypeCatalog::RECURRENCE_UNITS, true)) {
+            throw new RuntimeException('Recurrence unit must be days, weeks, months, or years.');
+        }
+
         $pdo ??= Database::connection();
-        $stmt = $pdo->prepare(
-            'INSERT INTO notifications (
-                source_event_id, completion_event_id,
-                due_date, reminder_start_date,
-                recurrence_interval, recurrence_unit, reminder_lead_days,
-                status, completed_at, disabled_at, created_at, updated_at
-             ) VALUES (?, NULL, ?, ?, ?, ?, ?, \'active\', NULL, NULL, NOW(), NOW())'
-        );
-        $stmt->execute([
-            $data['source_event_id'],
-            $data['due_date'],
-            $data['reminder_start_date'],
-            $data['recurrence_interval'],
-            $data['recurrence_unit'],
-            $data['reminder_lead_days'],
-        ]);
-        return (int) $pdo->lastInsertId();
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
+
+        try {
+            // Serialize writers for this source event (replaces former generated unique guard).
+            $lock = $pdo->prepare('SELECT id FROM events WHERE id = ? FOR UPDATE');
+            $lock->execute([$sourceEventId]);
+            if ($lock->fetch() === false) {
+                throw new RuntimeException('Source event not found.');
+            }
+
+            $this->deleteActiveForSource($sourceEventId, $pdo);
+
+            $stmt = $pdo->prepare(
+                'INSERT INTO notifications (
+                    source_event_id, completion_event_id,
+                    due_date, reminder_start_date,
+                    recurrence_interval, recurrence_unit, reminder_lead_days,
+                    popup_snoozed_through_date,
+                    status, completed_at, disabled_at, created_at, updated_at
+                 ) VALUES (?, NULL, ?, ?, ?, ?, ?, NULL, \'active\', NULL, NULL, NOW(), NOW())'
+            );
+            $stmt->execute([
+                $sourceEventId,
+                $data['due_date'],
+                $data['reminder_start_date'],
+                $interval,
+                $unit,
+                (int) $data['reminder_lead_days'],
+            ]);
+            $id = (int) $pdo->lastInsertId();
+
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+
+            return $id;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public function deleteActiveForSource(int $sourceEventId, ?PDO $pdo = null): int
@@ -486,7 +533,11 @@ final class NotificationRepository
         $pdo ??= Database::connection();
         $stmt = $pdo->prepare(
             "UPDATE notifications
-             SET status = 'disabled', disabled_at = NOW(), updated_at = NOW()
+             SET status = 'disabled',
+                 disabled_at = NOW(),
+                 completed_at = NULL,
+                 completion_event_id = NULL,
+                 updated_at = NOW()
              WHERE id = ? AND status = 'active'"
         );
         $stmt->execute([$id]);
@@ -498,12 +549,17 @@ final class NotificationRepository
      */
     public function markCompleted(int $id, int $completionEventId, ?PDO $pdo = null): bool
     {
+        if ($completionEventId < 1) {
+            return false;
+        }
+
         $pdo ??= Database::connection();
         $stmt = $pdo->prepare(
             "UPDATE notifications
              SET status = 'completed',
                  completion_event_id = ?,
                  completed_at = NOW(),
+                 disabled_at = NULL,
                  updated_at = NOW()
              WHERE id = ? AND status = 'active'"
         );

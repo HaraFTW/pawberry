@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return new class {
-    public function up(\PDO $pdo): void
+    public function up(PDO $pdo): void
     {
         $starters = [
             [
@@ -62,9 +62,7 @@ return new class {
             ],
         ];
 
-        $exists = $pdo->prepare(
-            'SELECT id FROM event_types WHERE name = ? LIMIT 1'
-        );
+        $exists = $pdo->prepare('SELECT id FROM event_types WHERE name = ? LIMIT 1');
         $insert = $pdo->prepare(
             'INSERT INTO event_types (
                 name, description, icon, color,

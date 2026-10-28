@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return new class {
-    public function up(\PDO $pdo): void
+    public function up(PDO $pdo): void
     {
         $pdo->exec(
             'CREATE TABLE IF NOT EXISTS events (
@@ -57,10 +57,7 @@ return new class {
                     ON DELETE CASCADE,
                 CONSTRAINT event_field_values_field_fk
                     FOREIGN KEY (event_type_field_id) REFERENCES event_type_fields (id)
-                    ON DELETE RESTRICT,
-                CONSTRAINT event_field_values_type_check CHECK (
-                    field_type IN (\'text\', \'number\', \'date\', \'checkbox\', \'rating\')
-                )
+                    ON DELETE RESTRICT
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
         );
 

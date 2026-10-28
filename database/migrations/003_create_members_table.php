@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 return new class {
-    public function up(\PDO $pdo): void
+    public function up(PDO $pdo): void
     {
         $pdo->exec(
             'CREATE TABLE IF NOT EXISTS members (
