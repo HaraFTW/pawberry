@@ -9,7 +9,7 @@ use PawBerry\Core\View;
 ?>
 <aside class="sidebar" aria-label="Primary">
     <div class="sidebar__brand">
-        <img src="<?= View::e(Url::asset('icons/paw.svg')) ?>" alt="" width="36" height="36">
+        <img src="<?= View::e(Url::asset('icons/icon-192.png')) ?>" alt="" width="36" height="36">
         <div>
             <p class="sidebar__name"><?= View::e(Config::appName()) ?></p>
             <p class="sidebar__tag">The Gang's journal</p>

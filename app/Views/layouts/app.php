@@ -51,8 +51,9 @@ if ((new AuthService())->check()) {
     <meta name="application-name" content="<?= View::e($appName) ?>">
     <title><?= $pageTitle ?></title>
     <link rel="manifest" href="<?= View::e(Url::to('/manifest.webmanifest')) ?>">
-    <link rel="icon" href="<?= View::e(Url::asset('icons/paw.svg')) ?>" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="<?= View::e(Url::asset('icons/paw.svg')) ?>">
+    <link rel="icon" href="<?= View::e(Url::asset('icons/favicon.ico')) ?>" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="<?= View::e(Url::asset('icons/favicon-32x32.png')) ?>">
+    <link rel="apple-touch-icon" href="<?= View::e(Url::asset('icons/apple-touch-icon.png')) ?>">
     <link rel="stylesheet" href="<?= View::e(Url::asset('css/app.css')) ?>">
     <script>
         window.PawBerry = {

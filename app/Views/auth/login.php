@@ -13,7 +13,7 @@ use PawBerry\Core\View;
 
     <div class="login__card">
         <div class="login__brand">
-            <img class="login__paw" src="<?= View::e(Url::asset('icons/paw.svg')) ?>" alt="" width="64" height="64">
+            <img class="login__paw" src="<?= View::e(Url::asset('icons/icon-192.png')) ?>" alt="" width="64" height="64">
             <h1 class="login__name"><?= View::e(Config::appName()) ?></h1>
             <p class="login__welcome">Welcome home. The Gang is waiting.</p>
         </div>

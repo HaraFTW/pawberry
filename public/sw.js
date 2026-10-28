@@ -1,7 +1,7 @@
 /* PawBerry service worker — safe foundation only.
  * Does not cache authenticated HTML, API responses, or private user data.
  */
-const CACHE_NAME = 'pawberry-static-v1';
+const CACHE_NAME = 'pawberry-static-v2';
 const STATIC_ASSETS = [];
 
 self.addEventListener('install', (event) => {

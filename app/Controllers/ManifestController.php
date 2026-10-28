@@ -24,10 +24,16 @@ final class ManifestController
             'theme_color' => '#342720',
             'icons' => [
                 [
-                    'src' => Url::asset('icons/paw.svg'),
-                    'sizes' => 'any',
-                    'type' => 'image/svg+xml',
-                    'purpose' => 'any maskable',
+                    'src' => Url::asset('icons/icon-192.png'),
+                    'sizes' => '192x192',
+                    'type' => 'image/png',
+                    'purpose' => 'any',
+                ],
+                [
+                    'src' => Url::asset('icons/icon-512.png'),
+                    'sizes' => '512x512',
+                    'type' => 'image/png',
+                    'purpose' => 'any',
                 ],
             ],
         ];
