@@ -18,6 +18,9 @@ use Throwable;
  *
  * Group key: event_type_id + exact member set.
  * Schedule anchor: most recent event in the group (event_date DESC, id DESC).
+ * The anchor event's own repeat schedule decides whether a reminder is created.
+ * An event type's schedule is only the default for new events, unless the user
+ * chooses to copy a type change onto every existing event of that type.
  */
 final class RecurrenceService
 {
@@ -47,7 +50,10 @@ final class RecurrenceService
      *   event_date: string,
      *   title: ?string,
      *   notes: ?string,
-     *   cost: ?string
+     *   cost: ?string,
+     *   recurrence_interval?: ?int,
+     *   recurrence_unit?: ?string,
+     *   reminder_lead_days?: int
      * } $eventData
      * @param list<int> $memberIds
      * @param list<array<string, mixed>> $fieldValues
@@ -59,6 +65,8 @@ final class RecurrenceService
         array $fieldValues,
         ?int $completesNotificationId = null
     ): array {
+        $eventData = $this->withRecurrenceDefaults($eventData);
+
         $pdo = Database::connection();
         $pdo->beginTransaction();
         try {
@@ -126,8 +134,40 @@ final class RecurrenceService
     }
 
     /**
+     * Copy a type's repeat schedule onto every event of that type and rebuild
+     * each group's reminder from the latest event.
+     */
+    public function applyTypeRecurrenceToEvents(
+        int $eventTypeId,
+        ?int $interval,
+        ?string $unit,
+        int $leadDays
+    ): void {
+        $pdo = Database::connection();
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
+
+        try {
+            $this->events->applyRecurrenceForType($eventTypeId, $interval, $unit, $leadDays);
+            foreach ($this->events->memberSetsForType($eventTypeId) as $memberIds) {
+                $this->syncGroup($eventTypeId, $memberIds, $pdo);
+            }
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+        } catch (Throwable $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /**
      * Rebuild the single active notification for a recurrence group from the
-     * latest matching event (if the event type still has recurrence enabled).
+     * latest matching event's own repeat schedule.
      *
      * @param list<int> $memberIds
      */
@@ -142,26 +182,21 @@ final class RecurrenceService
         }
 
         $latest = $this->events->findLatestForTypeAndExactMembers($eventTypeId, $memberIds);
-        if ($latest === null) {
+        if ($latest === null || !EventTypePresenter::isRecurring($latest)) {
             return;
         }
 
         $latestId = (int) $latest['id'];
+        $interval = (int) $latest['recurrence_interval'];
+        $unit = (string) $latest['recurrence_unit'];
+        $leadDays = (int) ($latest['reminder_lead_days'] ?? 0);
 
-        // Respect an explicit Disable: do not recreate an active reminder
-        // for the same source event. A newer recorded event may still schedule.
-        if ($this->notifications->hasDisabledForSource($latestId, $pdo)) {
+        // A disable blocks the same schedule only. A changed schedule may remind again.
+        $disabled = $this->notifications->latestDisabledForSource($latestId, $pdo);
+        if ($disabled !== null && $this->sameSchedule($disabled, $interval, $unit, $leadDays)) {
             return;
         }
 
-        $type = $this->types->find($eventTypeId);
-        if ($type === null || !EventTypePresenter::isRecurring($type)) {
-            return;
-        }
-
-        $interval = (int) $type['recurrence_interval'];
-        $unit = (string) $type['recurrence_unit'];
-        $leadDays = (int) ($type['reminder_lead_days'] ?? 0);
         $eventDate = (string) $latest['event_date'];
         $dueDate = $this->calculator->nextDueDate($eventDate, $interval, $unit);
         $reminderStart = $this->calculator->reminderStartDate($dueDate, $leadDays);
@@ -227,6 +262,43 @@ final class RecurrenceService
     public function calculator(): RecurrenceCalculator
     {
         return $this->calculator;
+    }
+
+    /**
+     * Events created without an explicit schedule copy the event type's default.
+     * An explicit null interval means this event does not repeat.
+     *
+     * @param array<string, mixed> $eventData
+     * @return array<string, mixed>
+     */
+    private function withRecurrenceDefaults(array $eventData): array
+    {
+        if (array_key_exists('recurrence_interval', $eventData)) {
+            $eventData['recurrence_unit'] = $eventData['recurrence_unit'] ?? null;
+            $eventData['reminder_lead_days'] = (int) ($eventData['reminder_lead_days'] ?? 0);
+            return $eventData;
+        }
+
+        $type = $this->types->find((int) ($eventData['event_type_id'] ?? 0));
+        if ($type !== null && EventTypePresenter::isRecurring($type)) {
+            $eventData['recurrence_interval'] = (int) $type['recurrence_interval'];
+            $eventData['recurrence_unit'] = (string) $type['recurrence_unit'];
+            $eventData['reminder_lead_days'] = (int) ($type['reminder_lead_days'] ?? 0);
+            return $eventData;
+        }
+
+        $eventData['recurrence_interval'] = null;
+        $eventData['recurrence_unit'] = null;
+        $eventData['reminder_lead_days'] = 0;
+        return $eventData;
+    }
+
+    /** @param array<string, mixed> $notification */
+    private function sameSchedule(array $notification, int $interval, string $unit, int $leadDays): bool
+    {
+        return (int) $notification['recurrence_interval'] === $interval
+            && (string) $notification['recurrence_unit'] === $unit
+            && (int) $notification['reminder_lead_days'] === $leadDays;
     }
 
     /** @param list<int> $ids */

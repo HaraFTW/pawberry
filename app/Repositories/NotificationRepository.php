@@ -497,14 +497,22 @@ final class NotificationRepository
 
     public function hasDisabledForSource(int $sourceEventId, ?PDO $pdo = null): bool
     {
+        return $this->latestDisabledForSource($sourceEventId, $pdo) !== null;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function latestDisabledForSource(int $sourceEventId, ?PDO $pdo = null): ?array
+    {
         $pdo ??= Database::connection();
         $stmt = $pdo->prepare(
-            "SELECT 1 FROM notifications
+            "SELECT * FROM notifications
              WHERE source_event_id = ? AND status = 'disabled'
+             ORDER BY id DESC
              LIMIT 1"
         );
         $stmt->execute([$sourceEventId]);
-        return $stmt->fetchColumn() !== false;
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
     }
 
     /**

@@ -98,12 +98,57 @@ function initEventForm() {
     return checked ? Number(checked.value) : 0;
   };
 
+  const recurrenceToggle = root.querySelector('[data-recurrence-toggle]');
+  const recurrencePanel = root.querySelector('[data-recurrence-panel]');
+  let recurrenceLocked = root.getAttribute('data-recurrence-locked') === '1';
+
+  const setRecurrenceEnabled = (enabled) => {
+    if (recurrencePanel) recurrencePanel.hidden = !enabled;
+    recurrencePanel?.querySelectorAll('input, select').forEach((el) => {
+      el.disabled = !enabled;
+    });
+  };
+
+  const applyTypeRecurrence = (typeId) => {
+    if (recurrenceLocked) return;
+    const spec = config.recurrenceByType?.[String(typeId)];
+    const enabled = !!(spec && spec.enabled);
+    if (recurrenceToggle) recurrenceToggle.checked = enabled;
+    const interval = root.querySelector('#event-interval');
+    const unit = root.querySelector('#event-unit');
+    const lead = root.querySelector('#event-reminder');
+    if (enabled) {
+      if (interval && spec.interval != null) interval.value = String(spec.interval);
+      if (unit && spec.unit) unit.value = spec.unit;
+      if (lead) lead.value = String(spec.lead ?? 0);
+    }
+    setRecurrenceEnabled(enabled);
+  };
+
+  const syncRecurrenceLink = (typeId) => {
+    const link = root.querySelector('[data-recurrence-type-link]');
+    if (!link) return;
+    const spec = config.recurrenceByType?.[String(typeId)];
+    if (spec?.editUrl) {
+      link.href = spec.editUrl;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+  };
+
   const syncTypeUI = () => {
     const typeId = selectedTypeId();
     root.querySelectorAll('.event-type-option').forEach((el) => {
       const input = el.querySelector('[data-type-radio]');
       el.classList.toggle('is-selected', !!(input && input.checked));
     });
+
+    applyTypeRecurrence(typeId);
+    syncRecurrenceLink(typeId);
+    if (recurrenceLocked) {
+      setRecurrenceEnabled(!!recurrenceToggle?.checked);
+    }
 
     if (typeConfirm) {
       const changed = originalType > 0 && typeId > 0 && typeId !== originalType;
@@ -122,6 +167,20 @@ function initEventForm() {
 
   root.querySelectorAll('[data-type-radio]').forEach((radio) => {
     radio.addEventListener('change', syncTypeUI);
+  });
+
+  recurrenceToggle?.addEventListener('change', () => {
+    recurrenceLocked = true;
+    setRecurrenceEnabled(recurrenceToggle.checked);
+  });
+  root.querySelector('#event-interval')?.addEventListener('input', () => {
+    recurrenceLocked = true;
+  });
+  root.querySelector('#event-unit')?.addEventListener('change', () => {
+    recurrenceLocked = true;
+  });
+  root.querySelector('#event-reminder')?.addEventListener('input', () => {
+    recurrenceLocked = true;
   });
 
   root.querySelectorAll('[data-member-check]').forEach((box) => {

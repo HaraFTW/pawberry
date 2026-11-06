@@ -4,6 +4,7 @@ use PawBerry\Core\Csrf;
 use PawBerry\Core\Url;
 use PawBerry\Core\View;
 use PawBerry\Support\EventPresenter;
+use PawBerry\Support\EventTypePresenter;
 
 /** @var array<string, mixed> $event */
 /** @var list<array<string, mixed>> $fieldValues */
@@ -13,6 +14,8 @@ use PawBerry\Support\EventPresenter;
 $title = EventPresenter::displayTitle($event);
 $dateLabel = EventPresenter::formatDate((string) $event['event_date']);
 $costLabel = EventPresenter::formatCost($event['cost'] ?? null);
+$recurrenceLabel = EventTypePresenter::recurrenceSummary($event);
+$reminderLabel = EventTypePresenter::reminderSummary($event);
 $hasCustomTitle = trim((string) ($event['title'] ?? '')) !== '';
 $needsHistoryConfirm = !empty($deletionImpact['needs_history_confirm']);
 $historyCount = (int) ($deletionImpact['history_count'] ?? 0);
@@ -89,6 +92,17 @@ $deleteConfirm = $needsHistoryConfirm
                             <span class="event-detail__archived">(archived)</span>
                         <?php endif; ?>
                     <?php endforeach; ?>
+                </dd>
+            </div>
+        <?php endif; ?>
+        <?php if ($recurrenceLabel): ?>
+            <div>
+                <dt>Repeats</dt>
+                <dd>
+                    <?= View::e($recurrenceLabel) ?>
+                    <?php if ($reminderLabel): ?>
+                        <span aria-hidden="true"> · </span><?= View::e($reminderLabel) ?>
+                    <?php endif; ?>
                 </dd>
             </div>
         <?php endif; ?>

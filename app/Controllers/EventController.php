@@ -16,6 +16,7 @@ use PawBerry\Repositories\NotificationRepository;
 use PawBerry\Services\EventAttachmentService;
 use PawBerry\Services\RecurrenceService;
 use PawBerry\Support\EventTypeCatalog;
+use PawBerry\Support\EventTypePresenter;
 use RuntimeException;
 use Throwable;
 
@@ -441,6 +442,7 @@ final class EventController
         }
 
         $today = (new \DateTimeImmutable('today'))->format('Y-m-d');
+        $repeats = EventTypePresenter::isRecurring($source);
 
         return [
             'event' => [
@@ -457,6 +459,10 @@ final class EventController
             'notes' => (string) ($source['notes'] ?? ''),
             'cost' => '',
             'fields' => $fields,
+            'recurrence_enabled' => $repeats,
+            'recurrence_interval' => $repeats ? (string) $source['recurrence_interval'] : '',
+            'recurrence_unit' => $repeats ? (string) $source['recurrence_unit'] : '',
+            'reminder_lead_days' => $repeats ? (string) ($source['reminder_lead_days'] ?? '0') : '0',
         ];
     }
 
@@ -619,6 +625,29 @@ final class EventController
             $cost = $costRaw;
         }
 
+        $recurrenceEnabled = (string) $request->input('recurrence_enabled', '') === '1';
+        $intervalRaw = trim((string) $request->input('recurrence_interval', ''));
+        $unitRaw = trim((string) $request->input('recurrence_unit', ''));
+        $reminderRaw = trim((string) $request->input('reminder_lead_days', '0'));
+        $interval = null;
+        $unit = null;
+        $reminder = 0;
+        if ($recurrenceEnabled) {
+            if ($intervalRaw !== '' && ctype_digit($intervalRaw)) {
+                $interval = (int) $intervalRaw;
+            }
+            if ($unitRaw !== '') {
+                $unit = $unitRaw;
+            }
+            if ($reminderRaw !== '' && ctype_digit($reminderRaw)) {
+                $reminder = (int) $reminderRaw;
+            } elseif ($reminderRaw === '0') {
+                $reminder = 0;
+            } else {
+                $reminder = -1;
+            }
+        }
+
         $typeChanged = $existingEvent !== null
             && $typeId > 0
             && $typeId !== (int) $existingEvent['event_type_id'];
@@ -694,6 +723,9 @@ final class EventController
                 'title' => $title,
                 'notes' => $notes,
                 'cost' => $cost,
+                'recurrence_interval' => $interval,
+                'recurrence_unit' => $unit,
+                'reminder_lead_days' => max(0, $reminder),
             ],
             'member_ids' => $memberIds,
             'field_values' => $fieldValues,
@@ -708,6 +740,11 @@ final class EventController
             'notes' => (string) ($notes ?? ''),
             'cost' => $costRaw,
             'fields' => $rawFields,
+            'recurrence_enabled' => $recurrenceEnabled,
+            'recurrence_interval' => $intervalRaw,
+            'recurrence_unit' => $unitRaw,
+            'reminder_lead_days' => $reminderRaw === '' ? '0' : $reminderRaw,
+            '_reminder_invalid' => $recurrenceEnabled && $reminder < 0,
         ];
     }
 
@@ -808,6 +845,24 @@ final class EventController
 
         if (!empty($parsed['type_changed']) && empty($parsed['confirm_type_change'])) {
             $errors['confirm_type_change'] = 'Confirm that custom field values from the previous type may be replaced.';
+        }
+
+        if (!empty($parsed['recurrence_enabled'])) {
+            $interval = $data['recurrence_interval'];
+            $unit = $data['recurrence_unit'];
+            if ($interval === null || $interval < 1) {
+                $errors['recurrence_interval'] = 'Enter how often this repeats (1 or more).';
+            } elseif ($interval > 999) {
+                $errors['recurrence_interval'] = 'That interval is a bit large.';
+            }
+            if ($unit === null || !in_array($unit, EventTypeCatalog::RECURRENCE_UNITS, true)) {
+                $errors['recurrence_unit'] = 'Choose days, weeks, months, or years.';
+            }
+            if (!empty($parsed['_reminder_invalid'])) {
+                $errors['reminder_lead_days'] = 'Enter 0 or a positive number of days.';
+            } elseif ((int) $data['reminder_lead_days'] > 365) {
+                $errors['reminder_lead_days'] = 'Reminder lead time should be 365 days or fewer.';
+            }
         }
 
         foreach ($parsed['field_values'] as $field) {

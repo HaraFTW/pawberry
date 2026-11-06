@@ -121,7 +121,8 @@ $pdo->prepare(
 $typeId = (int) $deworm['id'];
 
 $createdEventIds = [];
-$cleanup = static function () use ($pdo, &$createdEventIds, $notifications, $events, $originalRecurrence, $typeId): void {
+$tempTypeId = 0;
+$cleanup = static function () use ($pdo, &$createdEventIds, &$tempTypeId, $notifications, $events, $originalRecurrence, $typeId): void {
     foreach ($createdEventIds as $eid) {
         $pdo->prepare("DELETE FROM notifications WHERE source_event_id = ? OR completion_event_id = ?")
             ->execute([$eid, $eid]);
@@ -139,6 +140,9 @@ $cleanup = static function () use ($pdo, &$createdEventIds, $notifications, $eve
         $originalRecurrence['lead'] ?? 0,
         $typeId,
     ]);
+    if ($tempTypeId > 0) {
+        $pdo->prepare('DELETE FROM event_types WHERE id = ?')->execute([$tempTypeId]);
+    }
 };
 
 try {
@@ -291,6 +295,77 @@ try {
         $dupFailed = true;
     }
     $pass('duplicate completion rejected', $dupFailed);
+
+    $tempTypeId = $types->createWithFields([
+        'name' => 'P5 Recurrence ' . bin2hex(random_bytes(3)),
+        'description' => null,
+        'icon' => 'paw-print',
+        'color' => '#E4BB93',
+        'recurrence_interval' => 30,
+        'recurrence_unit' => 'days',
+        'reminder_lead_days' => 4,
+    ], []);
+    $hara = $byName['Hara'];
+    $isolated = $recurrence->createEventWithOptionalCompletion(
+        [
+            'event_type_id' => $tempTypeId,
+            'event_date' => '2026-03-01',
+            'title' => 'P5 explicit none',
+            'notes' => null,
+            'cost' => null,
+            'recurrence_interval' => null,
+            'recurrence_unit' => null,
+            'reminder_lead_days' => 0,
+        ],
+        [$hara],
+        []
+    );
+    $createdEventIds[] = $isolatedId = $isolated['event_id'];
+    $pass(
+        'explicit none on recurring type → no notification',
+        $notifications->findActiveForSourceEvent($isolatedId) === []
+    );
+
+    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, 14, 'days', 2);
+    $cascaded = $notifications->findActiveForSourceEvent($isolatedId);
+    $pass(
+        'cascade adds reminder',
+        count($cascaded) === 1 && ($cascaded[0]['due_date'] ?? '') === '2026-03-15'
+    );
+    $pass('cascade reminder lead', ($cascaded[0]['reminder_start_date'] ?? '') === '2026-03-13');
+
+    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, null, null, 0);
+    $pass('cascade remove clears reminder', $notifications->findActiveForSourceEvent($isolatedId) === []);
+
+    $events->update($isolatedId, [
+        'event_type_id' => $tempTypeId,
+        'event_date' => '2026-03-01',
+        'title' => 'P5 individual',
+        'notes' => null,
+        'cost' => null,
+        'recurrence_interval' => 5,
+        'recurrence_unit' => 'days',
+        'reminder_lead_days' => 1,
+    ], [$hara], []);
+    $recurrence->syncAfterEventUpdated($tempTypeId, [$hara]);
+    $own = $notifications->findActiveForSourceEvent($isolatedId);
+    $pass(
+        'individual recurrence schedules',
+        count($own) === 1 && ($own[0]['due_date'] ?? '') === '2026-03-06'
+    );
+
+    $events->update($isolatedId, [
+        'event_type_id' => $tempTypeId,
+        'event_date' => '2026-03-01',
+        'title' => 'P5 individual cleared',
+        'notes' => null,
+        'cost' => null,
+        'recurrence_interval' => null,
+        'recurrence_unit' => null,
+        'reminder_lead_days' => 0,
+    ], [$hara], []);
+    $recurrence->syncAfterEventUpdated($tempTypeId, [$hara]);
+    $pass('individual clear removes reminder', $notifications->findActiveForSourceEvent($isolatedId) === []);
 } finally {
     $cleanup();
 }

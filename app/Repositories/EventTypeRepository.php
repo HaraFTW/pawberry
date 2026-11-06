@@ -162,7 +162,10 @@ final class EventTypeRepository
     public function updateWithFields(int $id, array $data, array $fields): void
     {
         $pdo = Database::connection();
-        $pdo->beginTransaction();
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
 
         try {
             $stmt = $pdo->prepare(
@@ -185,9 +188,11 @@ final class EventTypeRepository
 
             $existing = $this->fieldsForType($id, true);
             $this->syncFields($pdo, $id, $fields, $existing);
-            $pdo->commit();
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
                 $pdo->rollBack();
             }
             throw $e;

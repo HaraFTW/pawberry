@@ -1663,6 +1663,38 @@ body.cropper-open .toast-region {
   padding-top: 0.25rem;
 }
 
+.etype-recurrence[hidden] {
+  display: none !important;
+}
+
+.etype-section__hint a {
+  color: var(--primary);
+  font-weight: 650;
+}
+
+.etype-cascade {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.35rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(228, 187, 147, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(228, 187, 147, 0.08);
+}
+
+.etype-cascade[hidden] {
+  display: none !important;
+}
+
+.etype-cascade__lead {
+  margin: 0;
+}
+
+.etype-cascade__choices {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .etype-reminder {
   display: flex;
   flex-wrap: wrap;

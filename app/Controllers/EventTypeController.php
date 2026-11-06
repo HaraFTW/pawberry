@@ -4,21 +4,29 @@ declare(strict_types=1);
 
 namespace PawBerry\Controllers;
 
+use PawBerry\Core\Database;
 use PawBerry\Core\Request;
 use PawBerry\Core\Response;
 use PawBerry\Core\Session;
 use PawBerry\Core\Url;
 use PawBerry\Core\View;
+use PawBerry\Repositories\EventRepository;
 use PawBerry\Repositories\EventTypeRepository;
+use PawBerry\Services\RecurrenceService;
 use PawBerry\Support\EventTypeCatalog;
+use Throwable;
 
 final class EventTypeController
 {
     private EventTypeRepository $types;
+    private EventRepository $events;
+    private RecurrenceService $recurrence;
 
     public function __construct()
     {
         $this->types = new EventTypeRepository();
+        $this->events = new EventRepository();
+        $this->recurrence = new RecurrenceService();
     }
 
     public function index(Request $request): Response
@@ -48,6 +56,7 @@ final class EventTypeController
             'fields' => [],
             'errors' => [],
             'old' => [],
+            'eventCount' => 0,
         ]);
     }
 
@@ -65,6 +74,7 @@ final class EventTypeController
                 'fields' => $parsed['fields'],
                 'errors' => $errors,
                 'old' => $parsed,
+                'eventCount' => 0,
             ]);
         }
 
@@ -91,6 +101,7 @@ final class EventTypeController
             'fields' => $fields,
             'errors' => [],
             'old' => [],
+            'eventCount' => $this->events->countByType((int) $type['id']),
         ]);
     }
 
@@ -104,6 +115,13 @@ final class EventTypeController
         $id = (int) $type['id'];
         $parsed = $this->parseInput($request, $id);
         $errors = $this->validate($parsed, $id);
+        $eventCount = $this->events->countByType($id);
+        $choice = (string) ($parsed['apply_recurrence_to_events'] ?? '');
+        $changed = $this->recurrenceChanged($type, $parsed['type']);
+
+        if ($changed && $eventCount > 0 && !in_array($choice, ['yes', 'no'], true)) {
+            $errors['apply_recurrence_to_events'] = 'Choose whether this repeat change should update existing events.';
+        }
 
         if ($errors !== []) {
             return View::render('event-types/form', [
@@ -114,11 +132,51 @@ final class EventTypeController
                 'fields' => $parsed['fields'],
                 'errors' => $errors,
                 'old' => $parsed,
+                'eventCount' => $eventCount,
             ]);
         }
 
-        $this->types->updateWithFields($id, $parsed['type'], $parsed['fields']);
-        Session::flash('success', $parsed['type']['name'] . ' was updated.');
+        try {
+            if ($changed && $choice === 'yes') {
+                $pdo = Database::connection();
+                $pdo->beginTransaction();
+                try {
+                    $this->types->updateWithFields($id, $parsed['type'], $parsed['fields']);
+                    $this->recurrence->applyTypeRecurrenceToEvents(
+                        $id,
+                        $parsed['type']['recurrence_interval'],
+                        $parsed['type']['recurrence_unit'],
+                        (int) $parsed['type']['reminder_lead_days']
+                    );
+                    $pdo->commit();
+                } catch (Throwable $e) {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    throw $e;
+                }
+            } else {
+                $this->types->updateWithFields($id, $parsed['type'], $parsed['fields']);
+            }
+        } catch (Throwable) {
+            Session::flash('error', 'The event type could not be saved. Please try again.');
+            return View::render('event-types/form', [
+                'title' => 'Edit Event Type',
+                'nav' => 'event-types',
+                'mode' => 'edit',
+                'type' => $type,
+                'fields' => $parsed['fields'],
+                'errors' => ['form' => 'Could not save.'],
+                'old' => $parsed,
+                'eventCount' => $eventCount,
+            ]);
+        }
+
+        $message = $parsed['type']['name'] . ' was updated.';
+        if ($changed && $choice === 'yes') {
+            $message = $parsed['type']['name'] . ' was updated. The repeat change was applied to all of its events.';
+        }
+        Session::flash('success', $message);
         Session::flash('sound', 'type');
         return Response::redirect(Url::to('/event-types'));
     }
@@ -212,7 +270,8 @@ final class EventTypeController
      *   color: string,
      *   recurrence_interval: string,
      *   recurrence_unit: string,
-     *   reminder_lead_days: string
+     *   reminder_lead_days: string,
+     *   apply_recurrence_to_events: string
      * }
      */
     private function parseInput(Request $request, ?int $typeId = null): array
@@ -232,6 +291,11 @@ final class EventTypeController
         // Normalize to #RRGGBB uppercase for storage consistency after validation.
         if (EventTypeCatalog::isValidHexColor($color)) {
             $color = strtoupper($color);
+        }
+
+        $choice = (string) $request->input('apply_recurrence_to_events', '');
+        if ($choice !== 'yes' && $choice !== 'no') {
+            $choice = '';
         }
 
         $recurrenceEnabled = (string) $request->input('recurrence_enabled', '') === '1';
@@ -325,8 +389,36 @@ final class EventTypeController
             'recurrence_interval' => $intervalRaw,
             'recurrence_unit' => $unitRaw,
             'reminder_lead_days' => $reminderRaw === '' ? '0' : $reminderRaw,
+            'apply_recurrence_to_events' => $choice,
             '_reminder_invalid' => $recurrenceEnabled && $reminder < 0,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $existing
+     * @param array{
+     *   recurrence_interval: ?int,
+     *   recurrence_unit: ?string,
+     *   reminder_lead_days: int
+     * } $incoming
+     */
+    private function recurrenceChanged(array $existing, array $incoming): bool
+    {
+        $oldInterval = $existing['recurrence_interval'] !== null && $existing['recurrence_interval'] !== ''
+            ? (int) $existing['recurrence_interval']
+            : null;
+        $oldUnit = $existing['recurrence_unit'] !== null && $existing['recurrence_unit'] !== ''
+            ? (string) $existing['recurrence_unit']
+            : null;
+        $oldLead = ($oldInterval === null || $oldUnit === null) ? 0 : (int) ($existing['reminder_lead_days'] ?? 0);
+
+        $newInterval = $incoming['recurrence_interval'];
+        $newUnit = $incoming['recurrence_unit'] !== null && $incoming['recurrence_unit'] !== ''
+            ? (string) $incoming['recurrence_unit']
+            : null;
+        $newLead = ($newInterval === null || $newUnit === null) ? 0 : (int) $incoming['reminder_lead_days'];
+
+        return $oldInterval !== $newInterval || $oldUnit !== $newUnit || $oldLead !== $newLead;
     }
 
     /**

@@ -11,6 +11,7 @@ use PawBerry\Support\EventTypePresenter;
 /** @var list<array<string, mixed>> $fields */
 /** @var array<string, string> $errors */
 /** @var array<string, mixed> $old */
+/** @var int $eventCount */
 
 $isEdit = $mode === 'edit';
 $action = $isEdit ? Url::to('/event-types/' . $type['id']) : Url::to('/event-types');
@@ -47,11 +48,24 @@ $unitLabels = EventTypeCatalog::recurrenceUnitLabels();
 $intervalVal = $value('recurrence_interval', $recurrenceEnabled ? '1' : '');
 $unitVal = $value('recurrence_unit', 'months');
 $reminderVal = $value('reminder_lead_days', '0');
+$eventCount = (int) ($eventCount ?? 0);
+$cascadeChoice = (string) ($old['apply_recurrence_to_events'] ?? '');
+$askCascade = $isEdit && $eventCount > 0 && (
+    isset($errors['apply_recurrence_to_events'])
+    || $cascadeChoice === 'yes'
+    || $cascadeChoice === 'no'
+);
+$savedRecurring = EventTypePresenter::isRecurring($type);
 ?>
 <section
     class="page form-page etype-form-page"
     data-etype-form
     data-mode="<?= View::e($mode) ?>"
+    data-event-count="<?= $eventCount ?>"
+    data-original-recurrence="<?= $savedRecurring ? '1' : '0' ?>"
+    data-original-interval="<?= View::e((string) ($type['recurrence_interval'] ?? '')) ?>"
+    data-original-unit="<?= View::e((string) ($type['recurrence_unit'] ?? '')) ?>"
+    data-original-lead="<?= View::e((string) ($type['reminder_lead_days'] ?? '0')) ?>"
 >
     <header class="page__header">
         <a class="profile-back" href="<?= View::e(Url::to('/event-types')) ?>">
@@ -179,7 +193,7 @@ $reminderVal = $value('reminder_lead_days', '0');
 
         <section class="etype-section" aria-labelledby="etype-repeat-title">
             <h2 id="etype-repeat-title" class="etype-section__title">Repeat</h2>
-            <p class="etype-section__hint">Optional default for events created from this type. Reminders come later.</p>
+            <p class="etype-section__hint">Default for new events of this type. If you change it and events already exist, you can apply that change to all of them.</p>
 
             <label class="check etype-repeat-toggle">
                 <input
@@ -245,6 +259,25 @@ $reminderVal = $value('reminder_lead_days', '0');
                     <p class="field__error" <?= $err('reminder_lead_days') ? '' : 'hidden' ?>><?= View::e((string) $err('reminder_lead_days')) ?></p>
                 </div>
             </div>
+
+            <?php if ($isEdit && $eventCount > 0): ?>
+                <div class="etype-cascade" data-recurrence-cascade <?= $askCascade ? '' : 'hidden' ?>>
+                    <p class="etype-cascade__lead">
+                        Apply this repeat change to all <?= $eventCount === 1 ? '1 event' : $eventCount . ' events' ?> of this type? Their reminders will be updated to match.
+                    </p>
+                    <div class="etype-cascade__choices">
+                        <label class="check">
+                            <input type="radio" name="apply_recurrence_to_events" value="yes" <?= $cascadeChoice === 'yes' ? 'checked' : '' ?>>
+                            <span>Yes, update all events</span>
+                        </label>
+                        <label class="check">
+                            <input type="radio" name="apply_recurrence_to_events" value="no" <?= $cascadeChoice === 'no' ? 'checked' : '' ?>>
+                            <span>No, leave existing events as they are</span>
+                        </label>
+                    </div>
+                    <p class="field__error" data-cascade-error <?= $err('apply_recurrence_to_events') ? '' : 'hidden' ?>><?= View::e((string) $err('apply_recurrence_to_events')) ?></p>
+                </div>
+            <?php endif; ?>
         </section>
 
         <section class="etype-section" aria-labelledby="etype-fields-title">

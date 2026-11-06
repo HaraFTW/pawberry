@@ -83,10 +83,48 @@ function initEventTypeForm() {
     });
   };
 
+  const eventCount = Number(root.getAttribute('data-event-count') || '0');
+  const cascadePanel = root.querySelector('[data-recurrence-cascade]');
+  const cascadeError = root.querySelector('[data-cascade-error]');
+
+  const recurrenceSignature = () => {
+    if (!recurrenceToggle?.checked) return 'off';
+    const interval = root.querySelector('#etype-interval')?.value.trim() ?? '';
+    const unit = root.querySelector('#etype-unit')?.value ?? '';
+    const lead = root.querySelector('#etype-reminder')?.value.trim() ?? '';
+    return `on:${interval}:${unit}:${lead}`;
+  };
+
+  const originalSignature = () => {
+    if (root.getAttribute('data-original-recurrence') !== '1') return 'off';
+    const interval = root.getAttribute('data-original-interval') || '';
+    const unit = root.getAttribute('data-original-unit') || '';
+    const lead = root.getAttribute('data-original-lead') || '0';
+    return `on:${interval}:${unit}:${lead}`;
+  };
+
+  const cascadeNeeded = () => eventCount > 0 && recurrenceSignature() !== originalSignature();
+
+  const syncCascade = () => {
+    if (!cascadePanel) return;
+    const needed = cascadeNeeded();
+    cascadePanel.hidden = !needed;
+    cascadePanel.querySelectorAll('input').forEach((input) => {
+      input.disabled = !needed;
+      if (!needed) input.checked = false;
+    });
+    if (!needed && cascadeError) cascadeError.hidden = true;
+  };
+
   recurrenceToggle?.addEventListener('change', () => {
     setRecurrenceEnabled(recurrenceToggle.checked);
+    syncCascade();
   });
+  root.querySelector('#etype-interval')?.addEventListener('input', syncCascade);
+  root.querySelector('#etype-unit')?.addEventListener('change', syncCascade);
+  root.querySelector('#etype-reminder')?.addEventListener('input', syncCascade);
   setRecurrenceEnabled(!!recurrenceToggle?.checked);
+  syncCascade();
 
   const reindexFields = () => {
     if (!fieldList) return;
@@ -165,7 +203,18 @@ function initEventTypeForm() {
     fieldList.insertBefore(dragRow, before ? over : over.nextSibling);
   });
 
-  form?.addEventListener('submit', () => {
+  form?.addEventListener('submit', (event) => {
+    syncCascade();
+    if (cascadeNeeded() && !form.querySelector('input[name="apply_recurrence_to_events"]:checked')) {
+      event.preventDefault();
+      if (cascadeError) {
+        cascadeError.hidden = false;
+        cascadeError.textContent = 'Choose whether this repeat change should update existing events.';
+      }
+      cascadePanel?.querySelector('input:not(:disabled)')?.focus();
+      return;
+    }
+
     const submit = form.querySelector('[data-submit]');
     const label = form.querySelector('[data-submit-label]');
     const loading = form.querySelector('[data-submit-loading]');

@@ -4,6 +4,8 @@ use PawBerry\Core\Csrf;
 use PawBerry\Core\Url;
 use PawBerry\Core\View;
 use PawBerry\Support\EventPresenter;
+use PawBerry\Support\EventTypeCatalog;
+use PawBerry\Support\EventTypePresenter;
 
 /** @var string $mode */
 /** @var array<string, mixed>|null $event */
@@ -47,6 +49,65 @@ foreach ($existingValues as $ev) {
 
 $originalTypeId = $isEdit ? (int) $event['event_type_id'] : 0;
 $typeValue = $selectedTypeId ?: (int) $value('event_type_id', '0');
+
+$selectedType = null;
+foreach ($types as $typeRow) {
+    if ((int) $typeRow['id'] === $typeValue) {
+        $selectedType = $typeRow;
+        break;
+    }
+}
+
+$recurrenceEnabled = array_key_exists('recurrence_enabled', $old)
+    ? !empty($old['recurrence_enabled'])
+    : ($event !== null
+        ? EventTypePresenter::isRecurring($event)
+        : ($selectedType !== null && EventTypePresenter::isRecurring($selectedType)));
+
+$intervalDefault = '';
+$unitDefault = 'months';
+$leadDefault = '0';
+if ($selectedType !== null && EventTypePresenter::isRecurring($selectedType)) {
+    $intervalDefault = (string) $selectedType['recurrence_interval'];
+    $unitDefault = (string) $selectedType['recurrence_unit'];
+    $leadDefault = (string) ($selectedType['reminder_lead_days'] ?? '0');
+} elseif ($event !== null && EventTypePresenter::isRecurring($event)) {
+    $intervalDefault = (string) $event['recurrence_interval'];
+    $unitDefault = (string) $event['recurrence_unit'];
+    $leadDefault = (string) ($event['reminder_lead_days'] ?? '0');
+}
+
+$intervalVal = array_key_exists('recurrence_interval', $old)
+    ? (string) ($old['recurrence_interval'] ?? '')
+    : ($event !== null
+        ? (string) ($event['recurrence_interval'] ?? '')
+        : $intervalDefault);
+if ($intervalVal === '' && $event === null) {
+    $intervalVal = $intervalDefault;
+}
+$unitVal = array_key_exists('recurrence_unit', $old)
+    ? (string) ($old['recurrence_unit'] ?? '')
+    : ($event !== null && !empty($event['recurrence_unit']) ? (string) $event['recurrence_unit'] : $unitDefault);
+$reminderVal = array_key_exists('reminder_lead_days', $old)
+    ? (string) ($old['reminder_lead_days'] ?? '0')
+    : ($event !== null ? (string) ($event['reminder_lead_days'] ?? $leadDefault) : $leadDefault);
+if ($unitVal === '') {
+    $unitVal = 'months';
+}
+$recurrenceLocked = $isEdit || $isCompleting || array_key_exists('recurrence_enabled', $old);
+$typeEditUrl = $selectedType !== null ? Url::to('/event-types/' . (int) $selectedType['id'] . '/edit') : '';
+$unitLabels = EventTypeCatalog::recurrenceUnitLabels();
+
+$recurrenceByType = [];
+foreach ($types as $typeRow) {
+    $recurrenceByType[(string) (int) $typeRow['id']] = [
+        'enabled' => EventTypePresenter::isRecurring($typeRow),
+        'interval' => $typeRow['recurrence_interval'] !== null ? (int) $typeRow['recurrence_interval'] : null,
+        'unit' => $typeRow['recurrence_unit'] !== null ? (string) $typeRow['recurrence_unit'] : null,
+        'lead' => (int) ($typeRow['reminder_lead_days'] ?? 0),
+        'editUrl' => Url::to('/event-types/' . (int) $typeRow['id'] . '/edit'),
+    ];
+}
 $dateValue = $value('event_date', $isEdit ? '' : $today);
 $costValue = $value('cost', $isEdit && isset($event['cost']) && $event['cost'] !== null ? (string) $event['cost'] : '');
 
@@ -68,6 +129,7 @@ foreach ($fieldsByType as $tid => $fields) {
     data-event-form
     data-mode="<?= View::e($mode) ?>"
     data-original-type="<?= (int) $originalTypeId ?>"
+    data-recurrence-locked="<?= $recurrenceLocked ? '1' : '0' ?>"
 >
     <header class="page__header">
         <a class="profile-back" href="<?= View::e($isEdit ? Url::to('/events/' . $event['id']) : ($isCompleting ? Url::to('/notifications') : Url::to('/events'))) ?>">
@@ -165,6 +227,78 @@ foreach ($fieldsByType as $tid => $fields) {
                 <label class="field__label" for="event-title">Title <span class="field__optional">optional</span></label>
                 <input class="input <?= $err('title') ? 'is-invalid' : '' ?>" type="text" id="event-title" name="title" maxlength="160" value="<?= View::e($value('title')) ?>" placeholder="Defaults to the event type name">
                 <p class="field__error" <?= $err('title') ? '' : 'hidden' ?>><?= View::e((string) $err('title')) ?></p>
+            </div>
+        </section>
+
+        <section class="etype-section" aria-labelledby="event-repeat-title">
+            <h2 id="event-repeat-title" class="etype-section__title">Repeat</h2>
+            <p class="etype-section__hint">
+                You can do this for the whole event type and have that change apply to every event of that type.
+                <a data-recurrence-type-link href="<?= View::e($typeEditUrl) ?>" <?= $typeEditUrl === '' ? 'hidden' : '' ?>>Edit the event type</a>
+            </p>
+
+            <label class="check etype-repeat-toggle">
+                <input
+                    type="checkbox"
+                    name="recurrence_enabled"
+                    value="1"
+                    <?= $recurrenceEnabled ? 'checked' : '' ?>
+                    data-recurrence-toggle
+                >
+                <span>Repeat this event on a schedule</span>
+            </label>
+
+            <div class="etype-recurrence" data-recurrence-panel <?= $recurrenceEnabled ? '' : 'hidden' ?>>
+                <div class="field-row etype-recurrence__row">
+                    <div class="field">
+                        <label class="field__label" for="event-interval">Every</label>
+                        <input
+                            class="input <?= $err('recurrence_interval') ? 'is-invalid' : '' ?>"
+                            type="number"
+                            id="event-interval"
+                            name="recurrence_interval"
+                            min="1"
+                            max="999"
+                            inputmode="numeric"
+                            value="<?= View::e($intervalVal) ?>"
+                            <?= $recurrenceEnabled ? '' : 'disabled' ?>
+                        >
+                        <p class="field__error" <?= $err('recurrence_interval') ? '' : 'hidden' ?>><?= View::e((string) $err('recurrence_interval')) ?></p>
+                    </div>
+                    <div class="field">
+                        <label class="field__label" for="event-unit">Unit</label>
+                        <select
+                            class="input <?= $err('recurrence_unit') ? 'is-invalid' : '' ?>"
+                            id="event-unit"
+                            name="recurrence_unit"
+                            <?= $recurrenceEnabled ? '' : 'disabled' ?>
+                        >
+                            <?php foreach ($unitLabels as $unit => $label): ?>
+                                <option value="<?= View::e($unit) ?>" <?= $unitVal === $unit ? 'selected' : '' ?>><?= View::e($label) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <p class="field__error" <?= $err('recurrence_unit') ? '' : 'hidden' ?>><?= View::e((string) $err('recurrence_unit')) ?></p>
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="field__label" for="event-reminder">Remind me</label>
+                    <div class="etype-reminder">
+                        <input
+                            class="input input--narrow <?= $err('reminder_lead_days') ? 'is-invalid' : '' ?>"
+                            type="number"
+                            id="event-reminder"
+                            name="reminder_lead_days"
+                            min="0"
+                            max="365"
+                            inputmode="numeric"
+                            value="<?= View::e($reminderVal) ?>"
+                            <?= $recurrenceEnabled ? '' : 'disabled' ?>
+                        >
+                        <span class="etype-reminder__suffix">days before the due date</span>
+                    </div>
+                    <p class="field__hint">Use 0 to remind on the due date itself.</p>
+                    <p class="field__error" <?= $err('reminder_lead_days') ? '' : 'hidden' ?>><?= View::e((string) $err('reminder_lead_days')) ?></p>
+                </div>
             </div>
         </section>
 
@@ -322,5 +456,6 @@ foreach ($fieldsByType as $tid => $fields) {
         ];
     }, $existingValues),
     'errors' => $errors,
+    'recurrenceByType' => $recurrenceByType,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?></script>
 <script type="module" src="<?= View::e(Url::asset('js/event-form.js')) ?>"></script>

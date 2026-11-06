@@ -326,7 +326,10 @@ final class EventRepository
      *   event_date: string,
      *   title: ?string,
      *   notes: ?string,
-     *   cost: ?string
+     *   cost: ?string,
+     *   recurrence_interval?: ?int,
+     *   recurrence_unit?: ?string,
+     *   reminder_lead_days?: int
      * } $data
      * @param list<int> $memberIds
      * @param list<array{
@@ -361,7 +364,10 @@ final class EventRepository
      *   event_date: string,
      *   title: ?string,
      *   notes: ?string,
-     *   cost: ?string
+     *   cost: ?string,
+     *   recurrence_interval?: ?int,
+     *   recurrence_unit?: ?string,
+     *   reminder_lead_days?: int
      * } $data
      * @param list<int> $memberIds
      * @param list<array{
@@ -383,7 +389,10 @@ final class EventRepository
      *   event_date: string,
      *   title: ?string,
      *   notes: ?string,
-     *   cost: ?string
+     *   cost: ?string,
+     *   recurrence_interval?: ?int,
+     *   recurrence_unit?: ?string,
+     *   reminder_lead_days?: int
      * } $data
      * @param list<int> $memberIds
      * @param list<array{
@@ -397,8 +406,11 @@ final class EventRepository
     private function insertEvent(PDO $pdo, array $data, array $memberIds, array $fieldValues): int
     {
         $stmt = $pdo->prepare(
-            'INSERT INTO events (event_type_id, event_date, title, notes, cost, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, NOW(), NOW())'
+            'INSERT INTO events (
+                event_type_id, event_date, title, notes, cost,
+                recurrence_interval, recurrence_unit, reminder_lead_days,
+                created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
         );
         $stmt->execute([
             $data['event_type_id'],
@@ -406,6 +418,9 @@ final class EventRepository
             $data['title'],
             $data['notes'],
             $data['cost'],
+            $data['recurrence_interval'] ?? null,
+            $data['recurrence_unit'] ?? null,
+            (int) ($data['reminder_lead_days'] ?? 0),
         ]);
         $id = (int) $pdo->lastInsertId();
         $this->replaceMembers($pdo, $id, $memberIds);
@@ -445,7 +460,10 @@ final class EventRepository
      *   event_date: string,
      *   title: ?string,
      *   notes: ?string,
-     *   cost: ?string
+     *   cost: ?string,
+     *   recurrence_interval?: ?int,
+     *   recurrence_unit?: ?string,
+     *   reminder_lead_days?: int
      * } $data
      * @param list<int> $memberIds
      * @param list<array{
@@ -478,6 +496,7 @@ final class EventRepository
             $stmt = $pdo->prepare(
                 'UPDATE events SET
                     event_type_id = ?, event_date = ?, title = ?, notes = ?, cost = ?,
+                    recurrence_interval = ?, recurrence_unit = ?, reminder_lead_days = ?,
                     updated_at = NOW()
                  WHERE id = ?'
             );
@@ -487,6 +506,9 @@ final class EventRepository
                 $data['title'],
                 $data['notes'],
                 $data['cost'],
+                $data['recurrence_interval'] ?? null,
+                $data['recurrence_unit'] ?? null,
+                (int) ($data['reminder_lead_days'] ?? 0),
                 $id,
             ]);
             $this->replaceMembers($pdo, $id, $memberIds);
@@ -515,6 +537,71 @@ final class EventRepository
             }
             throw $e;
         }
+    }
+
+    public function countByType(int $eventTypeId): int
+    {
+        $stmt = Database::connection()->prepare(
+            'SELECT COUNT(*) FROM events WHERE event_type_id = ?'
+        );
+        $stmt->execute([$eventTypeId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Distinct exact member sets used by events of this type.
+     *
+     * @return list<list<int>>
+     */
+    public function memberSetsForType(int $eventTypeId): array
+    {
+        $stmt = Database::connection()->prepare(
+            'SELECT id FROM events WHERE event_type_id = ?'
+        );
+        $stmt->execute([$eventTypeId]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $members = Database::connection()->prepare(
+            "SELECT event_id, member_id
+             FROM event_members
+             WHERE event_id IN ({$placeholders})
+             ORDER BY member_id ASC"
+        );
+        $members->execute($ids);
+
+        $byEvent = [];
+        foreach ($ids as $id) {
+            $byEvent[$id] = [];
+        }
+        foreach ($members->fetchAll() as $row) {
+            $byEvent[(int) $row['event_id']][] = (int) $row['member_id'];
+        }
+
+        $sets = [];
+        foreach ($byEvent as $memberIds) {
+            $memberIds = array_values(array_unique($memberIds));
+            sort($memberIds);
+            if ($memberIds === []) {
+                continue;
+            }
+            $sets[implode(',', $memberIds)] = $memberIds;
+        }
+
+        return array_values($sets);
+    }
+
+    public function applyRecurrenceForType(int $eventTypeId, ?int $interval, ?string $unit, int $leadDays): void
+    {
+        $stmt = Database::connection()->prepare(
+            'UPDATE events
+             SET recurrence_interval = ?, recurrence_unit = ?, reminder_lead_days = ?, updated_at = NOW()
+             WHERE event_type_id = ?'
+        );
+        $stmt->execute([$interval, $unit, $leadDays, $eventTypeId]);
     }
 
     /** @return list<array<string, mixed>> paths of attachments that were removed from DB */
