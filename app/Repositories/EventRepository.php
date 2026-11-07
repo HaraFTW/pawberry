@@ -274,53 +274,6 @@ final class EventRepository
     }
 
     /**
-     * Latest event for an exact member set + type (tie-break: higher id).
-     *
-     * @param list<int> $memberIds
-     * @return array<string, mixed>|null
-     */
-    public function findLatestForTypeAndExactMembers(int $eventTypeId, array $memberIds): ?array
-    {
-        $ids = $this->idsForTypeAndExactMembers($eventTypeId, $memberIds);
-        if ($ids === []) {
-            return null;
-        }
-        // ids are ordered event_date DESC, id DESC
-        return $this->find($ids[0]);
-    }
-
-    /**
-     * Event IDs matching type + exact member set, newest first.
-     *
-     * @param list<int> $memberIds
-     * @return list<int>
-     */
-    public function idsForTypeAndExactMembers(int $eventTypeId, array $memberIds): array
-    {
-        $memberIds = array_values(array_unique(array_map('intval', $memberIds)));
-        sort($memberIds);
-        if ($memberIds === [] || $eventTypeId < 1) {
-            return [];
-        }
-
-        $count = count($memberIds);
-        $placeholders = implode(',', array_fill(0, $count, '?'));
-        $params = array_merge([$eventTypeId, $count], $memberIds, [$count]);
-
-        $stmt = Database::connection()->prepare(
-            "SELECT e.id
-             FROM events e
-             WHERE e.event_type_id = ?
-               AND (SELECT COUNT(*) FROM event_members emc WHERE emc.event_id = e.id) = ?
-               AND (SELECT COUNT(*) FROM event_members emm
-                    WHERE emm.event_id = e.id AND emm.member_id IN ({$placeholders})) = ?
-             ORDER BY e.event_date DESC, e.id DESC"
-        );
-        $stmt->execute($params);
-        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-    }
-
-    /**
      * @param array{
      *   event_type_id: int,
      *   event_date: string,
@@ -548,50 +501,15 @@ final class EventRepository
         return (int) $stmt->fetchColumn();
     }
 
-    /**
-     * Distinct exact member sets used by events of this type.
-     *
-     * @return list<list<int>>
-     */
-    public function memberSetsForType(int $eventTypeId): array
+    /** @return list<int> */
+    public function idsForType(int $eventTypeId): array
     {
         $stmt = Database::connection()->prepare(
-            'SELECT id FROM events WHERE event_type_id = ?'
+            'SELECT id FROM events WHERE event_type_id = ? ORDER BY id ASC'
         );
         $stmt->execute([$eventTypeId]);
-        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-        if ($ids === []) {
-            return [];
-        }
 
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $members = Database::connection()->prepare(
-            "SELECT event_id, member_id
-             FROM event_members
-             WHERE event_id IN ({$placeholders})
-             ORDER BY member_id ASC"
-        );
-        $members->execute($ids);
-
-        $byEvent = [];
-        foreach ($ids as $id) {
-            $byEvent[$id] = [];
-        }
-        foreach ($members->fetchAll() as $row) {
-            $byEvent[(int) $row['event_id']][] = (int) $row['member_id'];
-        }
-
-        $sets = [];
-        foreach ($byEvent as $memberIds) {
-            $memberIds = array_values(array_unique($memberIds));
-            sort($memberIds);
-            if ($memberIds === []) {
-                continue;
-            }
-            $sets[implode(',', $memberIds)] = $memberIds;
-        }
-
-        return array_values($sets);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
     public function applyRecurrenceForType(int $eventTypeId, ?int $interval, ?string $unit, int $leadDays): void

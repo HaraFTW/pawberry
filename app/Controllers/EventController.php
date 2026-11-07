@@ -264,11 +264,6 @@ final class EventController
         }
 
         $typeChanged = (int) $parsed['event']['event_type_id'] !== (int) $event['event_type_id'];
-        $previousTypeId = (int) $event['event_type_id'];
-        $previousMemberIds = [];
-        foreach ($event['members'] ?? [] as $m) {
-            $previousMemberIds[] = (int) $m['id'];
-        }
 
         $pathsToDelete = [];
         foreach ($existingAttachments as $att) {
@@ -296,12 +291,7 @@ final class EventController
                 $typeChanged
             );
 
-            $this->recurrence->syncAfterEventUpdated(
-                (int) $parsed['event']['event_type_id'],
-                $parsed['member_ids'],
-                $previousTypeId,
-                $previousMemberIds
-            );
+            $this->recurrence->syncAfterEventUpdated($id, $event);
 
             foreach ($pathsToDelete as $path) {
                 $this->attachments->deleteRelative($path);
@@ -333,11 +323,6 @@ final class EventController
         }
 
         $id = (int) $event['id'];
-        $typeId = (int) $event['event_type_id'];
-        $memberIds = [];
-        foreach ($event['members'] ?? [] as $m) {
-            $memberIds[] = (int) $m['id'];
-        }
 
         $confirmHistory = (string) $request->input('confirm_history_delete', '') === '1';
         $impact = $this->recurrence->deletionImpact($id);
@@ -354,7 +339,6 @@ final class EventController
         try {
             $this->recurrence->prepareEventDeletion($id, $confirmHistory);
             $removed = $this->events->delete($id);
-            $this->recurrence->syncAfterEventDeleted($typeId, $memberIds);
             foreach ($removed as $att) {
                 $this->attachments->deleteRelative((string) $att['stored_path']);
             }

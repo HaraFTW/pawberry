@@ -23,7 +23,7 @@ final class NotificationPresenter
     public static function uiCategory(array $notification, ?DateTimeImmutable $today = null): string
     {
         $status = (string) ($notification['status'] ?? '');
-        if ($status === 'completed' || $status === 'disabled') {
+        if ($status === 'completed' || $status === 'disabled' || $status === 'canceled') {
             return 'history';
         }
         if ($status !== 'active') {
@@ -208,6 +208,7 @@ final class NotificationPresenter
             'active' => 'Active',
             'completed' => 'Completed',
             'disabled' => 'Disabled',
+            'canceled' => 'Repeat removed',
             'upcoming' => 'Upcoming',
             'due_soon' => 'Due soon',
             'due_today' => 'Due today',
@@ -224,7 +225,7 @@ final class NotificationPresenter
     public static function calendarStatus(array $notification, ?DateTimeImmutable $today = null): string
     {
         $persisted = (string) ($notification['status'] ?? 'active');
-        if ($persisted === 'completed' || $persisted === 'disabled') {
+        if ($persisted === 'completed' || $persisted === 'disabled' || $persisted === 'canceled') {
             return $persisted;
         }
         return self::displayState($notification, $today);

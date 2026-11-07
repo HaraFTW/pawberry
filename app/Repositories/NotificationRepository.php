@@ -230,9 +230,9 @@ final class NotificationRepository
              FROM notifications n
              INNER JOIN events se ON se.id = n.source_event_id
              INNER JOIN event_types et ON et.id = se.event_type_id
-             WHERE n.status IN ('completed', 'disabled')
+             WHERE n.status IN ('completed', 'disabled', 'canceled')
              ORDER BY
-                COALESCE(n.completed_at, n.disabled_at, n.updated_at) DESC,
+                COALESCE(n.completed_at, n.disabled_at, n.canceled_at, n.updated_at) DESC,
                 n.id DESC"
         );
         $items = $stmt->fetchAll();
@@ -391,7 +391,7 @@ final class NotificationRepository
     {
         $stmt = Database::connection()->prepare(
             "SELECT COUNT(*) FROM notifications
-             WHERE status IN ('completed', 'disabled')
+             WHERE status IN ('completed', 'disabled', 'canceled')
                AND (source_event_id = ? OR completion_event_id = ?)"
         );
         $stmt->execute([$eventId, $eventId]);
@@ -485,6 +485,128 @@ final class NotificationRepository
         }
     }
 
+    /**
+     * Make this source event's reminder active, updating its existing row when one exists.
+     *
+     * @param array{
+     *   source_event_id: int,
+     *   due_date: string,
+     *   reminder_start_date: string,
+     *   recurrence_interval: int,
+     *   recurrence_unit: string,
+     *   reminder_lead_days: int
+     * } $data
+     */
+    public function upsertActive(array $data, ?PDO $pdo = null): int
+    {
+        $sourceEventId = (int) $data['source_event_id'];
+        $interval = (int) $data['recurrence_interval'];
+        $unit = (string) $data['recurrence_unit'];
+
+        if ($sourceEventId < 1) {
+            throw new RuntimeException('A source event is required for an active reminder.');
+        }
+        if ($interval < 1) {
+            throw new RuntimeException('Recurrence interval must be at least 1.');
+        }
+        if (!in_array($unit, EventTypeCatalog::RECURRENCE_UNITS, true)) {
+            throw new RuntimeException('Recurrence unit must be days, weeks, months, or years.');
+        }
+
+        $pdo ??= Database::connection();
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
+        }
+
+        try {
+            $lock = $pdo->prepare('SELECT id FROM events WHERE id = ? FOR UPDATE');
+            $lock->execute([$sourceEventId]);
+            if ($lock->fetch() === false) {
+                throw new RuntimeException('Source event not found.');
+            }
+
+            $latest = $this->latestForSource($sourceEventId, $pdo);
+            if ($latest === null) {
+                $id = $this->createActive($data, $pdo);
+            } else {
+                $id = (int) $latest['id'];
+                $stmt = $pdo->prepare(
+                    "UPDATE notifications
+                     SET due_date = ?,
+                         reminder_start_date = ?,
+                         recurrence_interval = ?,
+                         recurrence_unit = ?,
+                         reminder_lead_days = ?,
+                         status = 'active',
+                         completed_at = NULL,
+                         disabled_at = NULL,
+                         canceled_at = NULL,
+                         completion_event_id = NULL,
+                         popup_snoozed_through_date = NULL,
+                         updated_at = NOW()
+                     WHERE id = ?"
+                );
+                $stmt->execute([
+                    $data['due_date'],
+                    $data['reminder_start_date'],
+                    $interval,
+                    $unit,
+                    (int) $data['reminder_lead_days'],
+                    $id,
+                ]);
+            }
+
+            $supersede = $pdo->prepare(
+                "UPDATE notifications
+                 SET status = 'canceled',
+                     canceled_at = NOW(),
+                     disabled_at = NULL,
+                     updated_at = NOW()
+                 WHERE source_event_id = ? AND status = 'active' AND id <> ?"
+            );
+            $supersede->execute([$sourceEventId, $id]);
+
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+
+            return $id;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /** @return array<string, mixed>|null */
+    public function latestForSource(int $sourceEventId, ?PDO $pdo = null): ?array
+    {
+        $pdo ??= Database::connection();
+        $stmt = $pdo->prepare(
+            'SELECT * FROM notifications WHERE source_event_id = ? ORDER BY id DESC LIMIT 1'
+        );
+        $stmt->execute([$sourceEventId]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    }
+
+    public function markCanceled(int $id, ?PDO $pdo = null): bool
+    {
+        $pdo ??= Database::connection();
+        $stmt = $pdo->prepare(
+            "UPDATE notifications
+             SET status = 'canceled',
+                 canceled_at = NOW(),
+                 disabled_at = NULL,
+                 updated_at = NOW()
+             WHERE id = ? AND status IN ('active', 'disabled')"
+        );
+        $stmt->execute([$id]);
+        return $stmt->rowCount() === 1;
+    }
+
     public function deleteActiveForSource(int $sourceEventId, ?PDO $pdo = null): int
     {
         $pdo ??= Database::connection();
@@ -495,47 +617,6 @@ final class NotificationRepository
         return $stmt->rowCount();
     }
 
-    public function hasDisabledForSource(int $sourceEventId, ?PDO $pdo = null): bool
-    {
-        return $this->latestDisabledForSource($sourceEventId, $pdo) !== null;
-    }
-
-    /** @return array<string, mixed>|null */
-    public function latestDisabledForSource(int $sourceEventId, ?PDO $pdo = null): ?array
-    {
-        $pdo ??= Database::connection();
-        $stmt = $pdo->prepare(
-            "SELECT * FROM notifications
-             WHERE source_event_id = ? AND status = 'disabled'
-             ORDER BY id DESC
-             LIMIT 1"
-        );
-        $stmt->execute([$sourceEventId]);
-        $row = $stmt->fetch();
-        return $row === false ? null : $row;
-    }
-
-    /**
-     * Remove superseded active notifications for the given source event IDs
-     * (used when a newer event in the same recurrence group takes over).
-     *
-     * @param list<int> $sourceEventIds
-     */
-    public function deleteActiveForSources(array $sourceEventIds, ?PDO $pdo = null): int
-    {
-        if ($sourceEventIds === []) {
-            return 0;
-        }
-        $pdo ??= Database::connection();
-        $placeholders = implode(',', array_fill(0, count($sourceEventIds), '?'));
-        $stmt = $pdo->prepare(
-            "DELETE FROM notifications
-             WHERE status = 'active' AND source_event_id IN ({$placeholders})"
-        );
-        $stmt->execute($sourceEventIds);
-        return $stmt->rowCount();
-    }
-
     public function disable(int $id, ?PDO $pdo = null): bool
     {
         $pdo ??= Database::connection();
@@ -543,6 +624,7 @@ final class NotificationRepository
             "UPDATE notifications
              SET status = 'disabled',
                  disabled_at = NOW(),
+                 canceled_at = NULL,
                  completed_at = NULL,
                  completion_event_id = NULL,
                  updated_at = NOW()
@@ -568,6 +650,7 @@ final class NotificationRepository
                  completion_event_id = ?,
                  completed_at = NOW(),
                  disabled_at = NULL,
+                 canceled_at = NULL,
                  updated_at = NOW()
              WHERE id = ? AND status = 'active'"
         );
@@ -595,7 +678,7 @@ final class NotificationRepository
         $pdo ??= Database::connection();
         $stmt = $pdo->prepare(
             "DELETE FROM notifications
-             WHERE status IN ('completed', 'disabled')
+             WHERE status IN ('completed', 'disabled', 'canceled')
                AND (source_event_id = ? OR completion_event_id = ?)"
         );
         $stmt->execute([$eventId, $eventId]);

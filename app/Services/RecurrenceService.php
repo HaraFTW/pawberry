@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PawBerry\Services;
 
+use DateTimeImmutable;
 use PawBerry\Core\Database;
 use PawBerry\Repositories\EventRepository;
 use PawBerry\Repositories\EventTypeRepository;
@@ -14,13 +15,10 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Owns recurrence grouping and active-notification scheduling.
- *
- * Group key: event_type_id + exact member set.
- * Schedule anchor: most recent event in the group (event_date DESC, id DESC).
- * The anchor event's own repeat schedule decides whether a reminder is created.
- * An event type's schedule is only the default for new events, unless the user
- * chooses to copy a type change onto every existing event of that type.
+ * Each event owns its own reminder. Events that share a type stay independent.
+ * An event type's schedule is the default for new events. When the user applies
+ * a type change to existing events, every event of that type is updated and its
+ * reminder follows that event's new schedule.
  */
 final class RecurrenceService
 {
@@ -85,7 +83,7 @@ final class RecurrenceService
                 }
             }
 
-            $this->syncGroup((int) $eventData['event_type_id'], $memberIds, $pdo);
+            $this->syncEvent($eventId, $pdo, true, false);
             $pdo->commit();
             return ['event_id' => $eventId];
         } catch (Throwable $e) {
@@ -97,45 +95,26 @@ final class RecurrenceService
     }
 
     /**
-     * After an event update, sync its group and optionally the previous group.
+     * Refresh one event's reminder after it is saved.
+     * A schedule change (including the event date) replaces a disabled or canceled reminder.
+     * Saving unrelated fields leaves a reminder the user disabled as it is.
      *
-     * @param list<int> $memberIds
-     * @param list<int>|null $previousMemberIds
+     * @param array<string, mixed> $before
      */
-    public function syncAfterEventUpdated(
-        int $eventTypeId,
-        array $memberIds,
-        ?int $previousTypeId = null,
-        ?array $previousMemberIds = null
-    ): void {
-        $pdo = Database::connection();
-        $pdo->beginTransaction();
-        try {
-            $this->syncGroup($eventTypeId, $memberIds, $pdo);
-
-            if (
-                $previousTypeId !== null
-                && $previousMemberIds !== null
-                && (
-                    $previousTypeId !== $eventTypeId
-                    || !$this->sameMemberSet($previousMemberIds, $memberIds)
-                )
-            ) {
-                $this->syncGroup($previousTypeId, $previousMemberIds, $pdo);
-            }
-
-            $pdo->commit();
-        } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            throw $e;
+    public function syncAfterEventUpdated(int $eventId, array $before): void
+    {
+        $after = $this->events->find($eventId);
+        if ($after === null) {
+            return;
         }
+
+        $changed = $this->scheduleSignature($before) !== $this->scheduleSignature($after);
+        $this->syncEvent($eventId, null, $changed, false);
     }
 
     /**
-     * Copy a type's repeat schedule onto every event of that type and rebuild
-     * each group's reminder from the latest event.
+     * Copy a type's repeat schedule onto every event of that type, then refresh
+     * each event's own reminder.
      */
     public function applyTypeRecurrenceToEvents(
         int $eventTypeId,
@@ -151,8 +130,8 @@ final class RecurrenceService
 
         try {
             $this->events->applyRecurrenceForType($eventTypeId, $interval, $unit, $leadDays);
-            foreach ($this->events->memberSetsForType($eventTypeId) as $memberIds) {
-                $this->syncGroup($eventTypeId, $memberIds, $pdo);
+            foreach ($this->events->idsForType($eventTypeId) as $eventId) {
+                $this->syncEvent($eventId, $pdo, true, true);
             }
             if ($ownsTransaction) {
                 $pdo->commit();
@@ -163,52 +142,6 @@ final class RecurrenceService
             }
             throw $e;
         }
-    }
-
-    /**
-     * Rebuild the single active notification for a recurrence group from the
-     * latest matching event's own repeat schedule.
-     *
-     * @param list<int> $memberIds
-     */
-    public function syncGroup(int $eventTypeId, array $memberIds, ?PDO $pdo = null): void
-    {
-        $pdo ??= Database::connection();
-        $memberIds = $this->normalizeMemberIds($memberIds);
-
-        $groupEventIds = $this->events->idsForTypeAndExactMembers($eventTypeId, $memberIds);
-        if ($groupEventIds !== []) {
-            $this->notifications->deleteActiveForSources($groupEventIds, $pdo);
-        }
-
-        $latest = $this->events->findLatestForTypeAndExactMembers($eventTypeId, $memberIds);
-        if ($latest === null || !EventTypePresenter::isRecurring($latest)) {
-            return;
-        }
-
-        $latestId = (int) $latest['id'];
-        $interval = (int) $latest['recurrence_interval'];
-        $unit = (string) $latest['recurrence_unit'];
-        $leadDays = (int) ($latest['reminder_lead_days'] ?? 0);
-
-        // A disable blocks the same schedule only. A changed schedule may remind again.
-        $disabled = $this->notifications->latestDisabledForSource($latestId, $pdo);
-        if ($disabled !== null && $this->sameSchedule($disabled, $interval, $unit, $leadDays)) {
-            return;
-        }
-
-        $eventDate = (string) $latest['event_date'];
-        $dueDate = $this->calculator->nextDueDate($eventDate, $interval, $unit);
-        $reminderStart = $this->calculator->reminderStartDate($dueDate, $leadDays);
-
-        $this->notifications->createActive([
-            'source_event_id' => $latestId,
-            'due_date' => $dueDate,
-            'reminder_start_date' => $reminderStart,
-            'recurrence_interval' => $interval,
-            'recurrence_unit' => $unit,
-            'reminder_lead_days' => $leadDays,
-        ], $pdo);
     }
 
     /**
@@ -251,14 +184,6 @@ final class RecurrenceService
         }
     }
 
-    /**
-     * @param list<int> $memberIds
-     */
-    public function syncAfterEventDeleted(int $eventTypeId, array $memberIds): void
-    {
-        $this->syncGroup($eventTypeId, $memberIds);
-    }
-
     public function calculator(): RecurrenceCalculator
     {
         return $this->calculator;
@@ -293,32 +218,112 @@ final class RecurrenceService
         return $eventData;
     }
 
-    /** @param array<string, mixed> $notification */
-    private function sameSchedule(array $notification, int $interval, string $unit, int $leadDays): bool
+    private function syncEvent(int $eventId, ?PDO $pdo, bool $reactivate, bool $fromCascade): void
     {
-        return (int) $notification['recurrence_interval'] === $interval
-            && (string) $notification['recurrence_unit'] === $unit
-            && (int) $notification['reminder_lead_days'] === $leadDays;
-    }
-
-    /** @param list<int> $ids */
-    private function normalizeMemberIds(array $ids): array
-    {
-        $normalized = [];
-        foreach ($ids as $id) {
-            $id = (int) $id;
-            if ($id > 0) {
-                $normalized[$id] = $id;
-            }
+        $pdo ??= Database::connection();
+        $ownsTransaction = !$pdo->inTransaction();
+        if ($ownsTransaction) {
+            $pdo->beginTransaction();
         }
-        $values = array_values($normalized);
-        sort($values);
-        return $values;
+
+        try {
+            $event = $this->events->find($eventId);
+            if ($event === null) {
+                if ($ownsTransaction) {
+                    $pdo->commit();
+                }
+                return;
+            }
+
+            $existing = $this->notifications->latestForSource($eventId, $pdo);
+            if (!EventTypePresenter::isRecurring($event)) {
+                if (
+                    $existing !== null
+                    && in_array((string) $existing['status'], ['active', 'disabled'], true)
+                ) {
+                    $this->notifications->markCanceled((int) $existing['id'], $pdo);
+                }
+            } else {
+                $this->syncRecurringEvent($event, $existing, $pdo, $reactivate, $fromCascade);
+            }
+
+            if ($ownsTransaction) {
+                $pdo->commit();
+            }
+        } catch (Throwable $e) {
+            if ($ownsTransaction && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
-    /** @param list<int> $a @param list<int> $b */
-    private function sameMemberSet(array $a, array $b): bool
+    /**
+     * @param array<string, mixed> $event
+     * @param array<string, mixed>|null $existing
+     */
+    private function syncRecurringEvent(
+        array $event,
+        ?array $existing,
+        PDO $pdo,
+        bool $reactivate,
+        bool $fromCascade
+    ): void {
+        $interval = (int) $event['recurrence_interval'];
+        $unit = (string) $event['recurrence_unit'];
+        $leadDays = (int) ($event['reminder_lead_days'] ?? 0);
+        $dueDate = $this->calculator->nextDueDate((string) $event['event_date'], $interval, $unit);
+        $inWindow = $this->dueIsCurrent($dueDate);
+        $status = $existing === null ? null : (string) $existing['status'];
+
+        if ($fromCascade && !$inWindow) {
+            if ($status === 'active') {
+                $this->notifications->deleteActiveForSource((int) $event['id'], $pdo);
+            }
+            return;
+        }
+
+        if ($fromCascade && $status === 'completed') {
+            return;
+        }
+
+        if (
+            !$fromCascade
+            && !$reactivate
+            && $existing !== null
+            && in_array($status, ['disabled', 'canceled', 'completed'], true)
+        ) {
+            return;
+        }
+
+        $this->notifications->upsertActive([
+            'source_event_id' => (int) $event['id'],
+            'due_date' => $dueDate,
+            'reminder_start_date' => $this->calculator->reminderStartDate($dueDate, $leadDays),
+            'recurrence_interval' => $interval,
+            'recurrence_unit' => $unit,
+            'reminder_lead_days' => $leadDays,
+        ], $pdo);
+    }
+
+    /** @param array<string, mixed> $event */
+    private function scheduleSignature(array $event): string
     {
-        return $this->normalizeMemberIds($a) === $this->normalizeMemberIds($b);
+        $date = (string) ($event['event_date'] ?? '');
+        if (!EventTypePresenter::isRecurring($event)) {
+            return 'off|' . $date;
+        }
+
+        return implode('|', [
+            (int) $event['recurrence_interval'],
+            (string) $event['recurrence_unit'],
+            (int) ($event['reminder_lead_days'] ?? 0),
+            $date,
+        ]);
+    }
+
+    private function dueIsCurrent(string $dueDate): bool
+    {
+        return $dueDate >= (new DateTimeImmutable('today'))->format('Y-m-d');
     }
 }

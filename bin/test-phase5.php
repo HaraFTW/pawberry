@@ -84,6 +84,171 @@ foreach ($allMembers as $m) {
     $byName[(string) $m['name']] = (int) $m['id'];
 }
 
+$independentMemberId = 0;
+$independentTypeId = 0;
+$independentEventIds = [];
+try {
+    $suffix = bin2hex(random_bytes(3));
+    $independentMemberId = $members->create([
+        'name' => 'P5 Solo ' . $suffix,
+        'species' => 'dog',
+        'breed' => null,
+        'sex' => null,
+        'birth_date' => null,
+        'microchip_number' => null,
+        'description' => null,
+        'notes' => null,
+    ]);
+    $independentTypeId = $types->createWithFields([
+        'name' => 'P5 Solo ' . $suffix,
+        'description' => null,
+        'icon' => 'paw-print',
+        'color' => '#E4BB93',
+        'recurrence_interval' => 14,
+        'recurrence_unit' => 'days',
+        'reminder_lead_days' => 2,
+    ], []);
+
+    $recentDate = $today->modify('-3 days')->format('Y-m-d');
+    $boundaryDate = $today->modify('-14 days')->format('Y-m-d');
+    $staleDate = $today->modify('-40 days')->format('Y-m-d');
+
+    $make = static function (string $date, string $title) use ($recurrence, $independentTypeId, $independentMemberId, &$independentEventIds): int {
+        $created = $recurrence->createEventWithOptionalCompletion(
+            [
+                'event_type_id' => $independentTypeId,
+                'event_date' => $date,
+                'title' => $title,
+                'notes' => null,
+                'cost' => null,
+            ],
+            [$independentMemberId],
+            []
+        );
+        $independentEventIds[] = $created['event_id'];
+        return $created['event_id'];
+    };
+
+    $recentId = $make($recentDate, 'P5 recent');
+    $boundaryId = $make($boundaryDate, 'P5 boundary');
+    $staleId = $make($staleDate, 'P5 stale');
+    $secondRecent = $make($recentDate, 'P5 second recent');
+
+    $recentRows = $notifications->findActiveForSourceEvent($recentId);
+    $boundaryRows = $notifications->findActiveForSourceEvent($boundaryId);
+    $staleRows = $notifications->findActiveForSourceEvent($staleId);
+    $secondRows = $notifications->findActiveForSourceEvent($secondRecent);
+    $pass('each event keeps its own reminder', count($recentRows) === 1 && count($secondRows) === 1);
+    $pass('second event does not replace the first', (int) $recentRows[0]['source_event_id'] === $recentId);
+    $pass('create notifies even when due is already past', count($staleRows) === 1);
+    $pass('exactly one interval ago is due today', ($boundaryRows[0]['due_date'] ?? '') === $today->format('Y-m-d'));
+
+    $pass('disable works', $notifications->disable((int) $recentRows[0]['id']));
+    $unchanged = $events->find($recentId);
+    $recurrence->syncAfterEventUpdated($recentId, $unchanged ?? []);
+    $pass('unrelated save leaves a disabled reminder', $notifications->findActiveForSourceEvent($recentId) === []);
+
+    $recurrence->applyTypeRecurrenceToEvents($independentTypeId, 14, 'days', 2);
+    $revived = $notifications->findActiveForSourceEvent($recentId);
+    $boundaryAfter = $notifications->findActiveForSourceEvent($boundaryId);
+    $staleAfter = $notifications->findBySourceEvent($staleId);
+    $pass('cascade reactivates a disabled in-window reminder', count($revived) === 1 && ($revived[0]['status'] ?? '') === 'active');
+    $pass('cascade includes a due date of today', count($boundaryAfter) === 1);
+    $pass(
+        'cascade drops a reminder older than the interval',
+        $notifications->findActiveForSourceEvent($staleId) === []
+        && $staleAfter === []
+    );
+
+    $completeId = (int) ($boundaryAfter[0]['id'] ?? 0);
+    $followUp = $recurrence->createEventWithOptionalCompletion(
+        [
+            'event_type_id' => $independentTypeId,
+            'event_date' => $today->format('Y-m-d'),
+            'title' => 'P5 follow up',
+            'notes' => null,
+            'cost' => null,
+        ],
+        [$independentMemberId],
+        [],
+        $completeId
+    );
+    $independentEventIds[] = $followUp['event_id'];
+    $completedRow = $notifications->find($completeId);
+    $pass('recording the event completes the old reminder', ($completedRow['status'] ?? '') === 'completed');
+    $pass(
+        'follow-up has its own reminder',
+        count($notifications->findActiveForSourceEvent($followUp['event_id'])) === 1
+    );
+    $recurrence->applyTypeRecurrenceToEvents($independentTypeId, 14, 'days', 2);
+    $completedAgain = $notifications->find($completeId);
+    $pass('cascade leaves a completed reminder completed', ($completedAgain['status'] ?? '') === 'completed');
+
+    $recurrence->applyTypeRecurrenceToEvents($independentTypeId, null, null, 0);
+    $removed = $notifications->findBySourceEvent($recentId);
+    $pass(
+        'cascade remove marks the reminder canceled',
+        $notifications->findActiveForSourceEvent($recentId) === []
+        && ($removed[0]['status'] ?? '') === 'canceled'
+    );
+
+    $before = $events->find($recentId) ?? [];
+    $events->update($recentId, [
+        'event_type_id' => $independentTypeId,
+        'event_date' => $recentDate,
+        'title' => 'P5 individual',
+        'notes' => null,
+        'cost' => null,
+        'recurrence_interval' => 5,
+        'recurrence_unit' => 'days',
+        'reminder_lead_days' => 1,
+    ], [$independentMemberId], []);
+    $recurrence->syncAfterEventUpdated($recentId, $before);
+    $own = $notifications->findActiveForSourceEvent($recentId);
+    $expectedDue = $c->nextDueDate($recentDate, 5, 'days');
+    $pass(
+        'individual recurrence schedules its own reminder',
+        count($own) === 1 && ($own[0]['due_date'] ?? '') === $expectedDue
+    );
+
+    $beforeIndividual = $events->find($recentId) ?? [];
+    $events->update($recentId, [
+        'event_type_id' => $independentTypeId,
+        'event_date' => $recentDate,
+        'title' => 'P5 individual cleared',
+        'notes' => null,
+        'cost' => null,
+        'recurrence_interval' => null,
+        'recurrence_unit' => null,
+        'reminder_lead_days' => 0,
+    ], [$independentMemberId], []);
+    $recurrence->syncAfterEventUpdated($recentId, $beforeIndividual);
+    $cleared = $notifications->findBySourceEvent($recentId);
+    $pass(
+        'individual clear cancels the reminder',
+        $notifications->findActiveForSourceEvent($recentId) === []
+        && ($cleared[0]['status'] ?? '') === 'canceled'
+    );
+} catch (Throwable $e) {
+    $pass('independent recurrence checks', false);
+    fwrite(STDERR, $e->getMessage() . "\n");
+} finally {
+    foreach ($independentEventIds as $eid) {
+        $pdo->prepare('DELETE FROM notifications WHERE source_event_id = ? OR completion_event_id = ?')
+            ->execute([$eid, $eid]);
+        try {
+            $events->delete($eid);
+        } catch (Throwable) {
+        }
+    }
+    if ($independentTypeId > 0) {
+        $pdo->prepare('DELETE FROM event_types WHERE id = ?')->execute([$independentTypeId]);
+    }
+    if ($independentMemberId > 0) {
+        $pdo->prepare('DELETE FROM members WHERE id = ?')->execute([$independentMemberId]);
+    }
+}
+
 foreach (['Berry', 'Mochi', 'Hara'] as $need) {
     if (!isset($byName[$need])) {
         echo "SKIP integration — missing member {$need}\n";
@@ -209,8 +374,8 @@ try {
     $createdEventIds[] = $e2 = $res2['event_id'];
     $nOld = $notifications->findActiveForSourceEvent($e1);
     $nNew = $notifications->findActiveForSourceEvent($e2);
-    $pass('older source has no active', $nOld === []);
-    $pass('newer source controls due', count($nNew) === 1 && ($nNew[0]['due_date'] ?? '') === '2026-11-19');
+    $pass('older event keeps its own reminder', count($nOld) === 1 && ($nOld[0]['due_date'] ?? '') === '2026-10-31');
+    $pass('newer event has its own reminder', count($nNew) === 1 && ($nNew[0]['due_date'] ?? '') === '2026-11-19');
 
     // Backdated older event does not override
     $res3 = $recurrence->createEventWithOptionalCompletion(
@@ -226,7 +391,9 @@ try {
     );
     $createdEventIds[] = $e3 = $res3['event_id'];
     $still = $notifications->findActiveForSourceEvent($e2);
-    $pass('backdated does not override', count($still) === 1 && (int) $still[0]['source_event_id'] === $e2);
+    $backdated = $notifications->findActiveForSourceEvent($e3);
+    $pass('backdated event does not replace the newer one', count($still) === 1 && (int) $still[0]['source_event_id'] === $e2);
+    $pass('backdated event has its own reminder', count($backdated) === 1);
 
     // Exact member-set independence: Berry+Mochi separate from Berry
     $res4 = $recurrence->createEventWithOptionalCompletion(
@@ -250,8 +417,9 @@ try {
     // Disable respects no reactivation on sync
     $nid = (int) $pairActive[0]['id'];
     $pass('disable works', $notifications->disable($nid));
-    $recurrence->syncGroup($typeId, [$berry, $mochi]);
-    $pass('disabled not reactivated', $notifications->findActiveForSourceEvent($e4) === []);
+    $pairEvent = $events->find($e4) ?? [];
+    $recurrence->syncAfterEventUpdated($e4, $pairEvent);
+    $pass('disabled not reactivated by an unrelated save', $notifications->findActiveForSourceEvent($e4) === []);
 
     // Completion flow
     $activeBerry = $notifications->findActiveForSourceEvent($e2);
@@ -326,20 +494,40 @@ try {
         $notifications->findActiveForSourceEvent($isolatedId) === []
     );
 
-    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, 14, 'days', 2);
-    $cascaded = $notifications->findActiveForSourceEvent($isolatedId);
-    $pass(
-        'cascade adds reminder',
-        count($cascaded) === 1 && ($cascaded[0]['due_date'] ?? '') === '2026-03-15'
-    );
-    $pass('cascade reminder lead', ($cascaded[0]['reminder_start_date'] ?? '') === '2026-03-13');
-
-    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, null, null, 0);
-    $pass('cascade remove clears reminder', $notifications->findActiveForSourceEvent($isolatedId) === []);
-
+    $inWindowDate = $today->modify('-3 days')->format('Y-m-d');
     $events->update($isolatedId, [
         'event_type_id' => $tempTypeId,
-        'event_date' => '2026-03-01',
+        'event_date' => $inWindowDate,
+        'title' => 'P5 explicit none',
+        'notes' => null,
+        'cost' => null,
+        'recurrence_interval' => null,
+        'recurrence_unit' => null,
+        'reminder_lead_days' => 0,
+    ], [$hara], []);
+
+    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, 14, 'days', 2);
+    $cascaded = $notifications->findActiveForSourceEvent($isolatedId);
+    $expectedDue = $c->nextDueDate($inWindowDate, 14, 'days');
+    $expectedStart = $c->reminderStartDate($expectedDue, 2);
+    $pass(
+        'cascade adds reminder',
+        count($cascaded) === 1 && ($cascaded[0]['due_date'] ?? '') === $expectedDue
+    );
+    $pass('cascade reminder lead', ($cascaded[0]['reminder_start_date'] ?? '') === $expectedStart);
+
+    $recurrence->applyTypeRecurrenceToEvents($tempTypeId, null, null, 0);
+    $clearedCascade = $notifications->findBySourceEvent($isolatedId);
+    $pass(
+        'cascade remove clears reminder',
+        $notifications->findActiveForSourceEvent($isolatedId) === []
+        && ($clearedCascade[0]['status'] ?? '') === 'canceled'
+    );
+
+    $beforeIndividual = $events->find($isolatedId) ?? [];
+    $events->update($isolatedId, [
+        'event_type_id' => $tempTypeId,
+        'event_date' => $inWindowDate,
         'title' => 'P5 individual',
         'notes' => null,
         'cost' => null,
@@ -347,16 +535,17 @@ try {
         'recurrence_unit' => 'days',
         'reminder_lead_days' => 1,
     ], [$hara], []);
-    $recurrence->syncAfterEventUpdated($tempTypeId, [$hara]);
+    $recurrence->syncAfterEventUpdated($isolatedId, $beforeIndividual);
     $own = $notifications->findActiveForSourceEvent($isolatedId);
     $pass(
         'individual recurrence schedules',
-        count($own) === 1 && ($own[0]['due_date'] ?? '') === '2026-03-06'
+        count($own) === 1 && ($own[0]['due_date'] ?? '') === $c->nextDueDate($inWindowDate, 5, 'days')
     );
 
+    $beforeClear = $events->find($isolatedId) ?? [];
     $events->update($isolatedId, [
         'event_type_id' => $tempTypeId,
-        'event_date' => '2026-03-01',
+        'event_date' => $inWindowDate,
         'title' => 'P5 individual cleared',
         'notes' => null,
         'cost' => null,
@@ -364,8 +553,13 @@ try {
         'recurrence_unit' => null,
         'reminder_lead_days' => 0,
     ], [$hara], []);
-    $recurrence->syncAfterEventUpdated($tempTypeId, [$hara]);
-    $pass('individual clear removes reminder', $notifications->findActiveForSourceEvent($isolatedId) === []);
+    $recurrence->syncAfterEventUpdated($isolatedId, $beforeClear);
+    $clearedIndividual = $notifications->findBySourceEvent($isolatedId);
+    $pass(
+        'individual clear removes reminder',
+        $notifications->findActiveForSourceEvent($isolatedId) === []
+        && ($clearedIndividual[0]['status'] ?? '') === 'canceled'
+    );
 } finally {
     $cleanup();
 }

@@ -112,6 +112,8 @@ $emptyIcon = match ($view) {
                                 <?php endif; ?>
                             <?php elseif ($isHistory && $status === 'disabled'): ?>
                                 <span>Disabled <?= View::e(NotificationPresenter::formatDateTime($n['disabled_at'] ?? null) ?? '') ?></span>
+                            <?php elseif ($isHistory && $status === 'canceled'): ?>
+                                <span>Repeat removed <?= View::e(NotificationPresenter::formatDateTime($n['canceled_at'] ?? null) ?? '') ?></span>
                             <?php endif; ?>
                         </div>
 
@@ -146,7 +148,7 @@ $emptyIcon = match ($view) {
                                 <form
                                     method="post"
                                     action="<?= View::e(Url::to('/notifications/' . (int) $n['id'] . '/disable')) ?>"
-                                    data-confirm="Disable this reminder? It will move to history and will not schedule another occurrence."
+                                    data-confirm="Disable this reminder? It will move to history."
                                 >
                                     <?= Csrf::field() ?>
                                     <button type="submit" class="btn btn--ghost btn--compact">Disable</button>
